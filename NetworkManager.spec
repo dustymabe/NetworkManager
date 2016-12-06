@@ -12,7 +12,7 @@
 
 %global rpm_version 1.4.2
 %global real_version 1.4.2
-%global release_version 1
+%global release_version 2
 %global epoch_version 1
 
 %global obsoletes_nmver 1:0.9.9.95-1
@@ -648,6 +648,9 @@ fi
 %endif
 
 %changelog
+* Tue Dec  6 2016 Thomas Haller <thaller@redhat.com> - 1:1.4.2-2
+- Rebuild package for vala generation error (rh#1398738)
+
 * Mon Oct 10 2016 Lubomir Rintel <lkundrak@v3.sk> - 1:1.4.2-1
 - Update to 1.4.2
 
