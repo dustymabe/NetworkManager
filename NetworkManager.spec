@@ -10,8 +10,8 @@
 %global snapshot %{nil}
 %global git_sha %{nil}
 
-%global rpm_version 1.4.2
-%global real_version 1.4.2
+%global rpm_version 1.4.4
+%global real_version 1.4.4
 %global release_version 2
 %global epoch_version 1
 
@@ -648,6 +648,9 @@ fi
 %endif
 
 %changelog
+* Fri Dec 16 2016 Lubomir Rintel <lkundrak@v3.sk> - 1:1.4.4-1
+- Update to 1.4.4
+
 * Tue Dec  6 2016 Thomas Haller <thaller@redhat.com> - 1:1.4.2-2
 - Rebuild package for vala generation error (rh#1398738)
 
