@@ -648,7 +648,7 @@ fi
 %endif
 
 %changelog
-* Fri Dec 16 2016 Lubomir Rintel <lkundrak@v3.sk> - 1:1.4.4-1
+* Fri Dec 16 2016 Lubomir Rintel <lkundrak@v3.sk> - 1:1.4.4-2
 - Update to 1.4.4
 
 * Tue Dec  6 2016 Thomas Haller <thaller@redhat.com> - 1:1.4.2-2
