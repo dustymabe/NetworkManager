@@ -12,7 +12,7 @@
 
 %global rpm_version 1.4.4
 %global real_version 1.4.4
-%global release_version 2
+%global release_version 3
 %global epoch_version 1
 
 %global obsoletes_nmver 1:0.9.9.95-1
@@ -98,7 +98,7 @@ Source1: NetworkManager.conf
 Source2: 00-server.conf
 Source3: 20-connectivity-fedora.conf
 
-#Patch1: 0001-some.patch
+Patch1: 0001-upstream-patches.patch
 
 Requires(post): systemd
 Requires(preun): systemd
@@ -340,7 +340,7 @@ by nm-connection-editor and nm-applet in a non-graphical environment.
 %prep
 %setup -q -n NetworkManager-%{real_version}
 
-#%patch1 -p1
+%patch1 -p1
 
 %build
 %if %{with regen_docs}
@@ -648,6 +648,10 @@ fi
 %endif
 
 %changelog
+* Sat Jan 14 2017 Thomas Haller <thaller@redhat.com> - 1:1.4.4-3
+- apply patches from upstream nm-1-4 stable branch
+- fix cloned-mac-address default for old keyfile connections  (rh#1413297)
+
 * Fri Dec 16 2016 Lubomir Rintel <lkundrak@v3.sk> - 1:1.4.4-2
 - Update to 1.4.4
 

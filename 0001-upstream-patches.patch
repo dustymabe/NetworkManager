@@ -1,0 +1,1449 @@
+From a0e930c5b58b0907f48cc2fee39afaff6e1503da Mon Sep 17 00:00:00 2001
+From: Dan Williams <dcbw@redhat.com>
+Date: Fri, 16 Dec 2016 11:34:29 -0600
+Subject: [PATCH 01/11] wifi: don't request new PSK for locally-generated
+ WLAN_REASON_DISASSOC_DUE_TO_INACTIVITY errors
+
+This usually indicates that the driver missed beacons from the AP, due to driver bugs
+or faulty power-save management.  It doesn't mean that the PSK is wrong.
+
+(cherry picked from commit 0c5aa6e48b713a5626c20303c683f7d96ee13184)
+(cherry picked from commit 28cd59a016382fb18af783544f85284ffbfdc178)
+---
+ src/devices/wifi/nm-device-wifi.c | 12 +++++++++++-
+ 1 file changed, 11 insertions(+), 1 deletion(-)
+
+diff --git a/src/devices/wifi/nm-device-wifi.c b/src/devices/wifi/nm-device-wifi.c
+index c58b3fa..15ad6e6 100644
+--- a/src/devices/wifi/nm-device-wifi.c
++++ b/src/devices/wifi/nm-device-wifi.c
+@@ -1856,6 +1856,7 @@ need_new_8021x_secrets (NMDeviceWifi *self,
+ static gboolean
+ need_new_wpa_psk (NMDeviceWifi *self,
+                   guint32 old_state,
++                  gint disconnect_reason,
+                   const char **setting_name)
+ {
+ 	NMSettingWirelessSecurity *s_wsec;
+@@ -1876,6 +1877,15 @@ need_new_wpa_psk (NMDeviceWifi *self,
+ 		key_mgmt = nm_setting_wireless_security_get_key_mgmt (s_wsec);
+ 
+ 	if (g_strcmp0 (key_mgmt, "wpa-psk") == 0) {
++		/* -4 (locally-generated WLAN_REASON_DISASSOC_DUE_TO_INACTIVITY) usually
++		 * means the driver missed beacons from the AP.  This usually happens
++		 * due to driver bugs or faulty power-save management.  It doesn't
++		 * indicate that the PSK is wrong.
++		 */
++		#define LOCAL_WLAN_REASON_DISASSOC_DUE_TO_INACTIVITY -4
++		if (disconnect_reason == LOCAL_WLAN_REASON_DISASSOC_DUE_TO_INACTIVITY)
++			return FALSE;
++
+ 		*setting_name = NM_SETTING_WIRELESS_SECURITY_SETTING_NAME;
+ 		return TRUE;
+ 	}
+@@ -1901,7 +1911,7 @@ handle_8021x_or_psk_auth_fail (NMDeviceWifi *self,
+ 	g_return_val_if_fail (req != NULL, FALSE);
+ 
+ 	if (   need_new_8021x_secrets (self, old_state, &setting_name)
+-	    || need_new_wpa_psk (self, old_state, &setting_name)) {
++	    || need_new_wpa_psk (self, old_state, disconnect_reason, &setting_name)) {
+ 
+ 		nm_act_request_clear_secrets (req);
+ 
+-- 
+2.9.3
+
+
+From 86299a1e1f34808e96e094ed0bb86492d5b7e637 Mon Sep 17 00:00:00 2001
+From: Thomas Haller <thaller@redhat.com>
+Date: Wed, 4 Jan 2017 09:30:38 +0100
+Subject: [PATCH 02/11] docs: fix handling enums without explicit numeric value
+ in "tools/enums-to-docbook.pl"
+
+Previously, an enum that didn't explicitly specify a numeric value
+would wrongly start counting at 1.
+
+E.g.
+
+  typedef enum {
+     MY_VAL,
+  } Name;
+
+would result in documentation with MY_VAL=1.
+
+https://bugzilla.gnome.org/show_bug.cgi?id=776848
+(cherry picked from commit 36ec46e8f86db03a9777c5885ff685ad8cf74957)
+(cherry picked from commit 26f0d68e826b9936d82446b451cc0bb69d336685)
+---
+ tools/enums-to-docbook.pl | 7 +++++--
+ 1 file changed, 5 insertions(+), 2 deletions(-)
+
+diff --git a/tools/enums-to-docbook.pl b/tools/enums-to-docbook.pl
+index d3d8c33..845598a 100755
+--- a/tools/enums-to-docbook.pl
++++ b/tools/enums-to-docbook.pl
+@@ -62,8 +62,11 @@ sub inc
+ {
+ 	my $val = shift;
+ 
+-	if ($val =~ /^\d+$/) {
++	if ($val =~ /^-?\d+$/) {
+ 		my $len = length $val;
++		if ($val =~ /^-/ && ($val + 1 == 0)) {
++			$len = $len - 1
++		}
+ 		return sprintf "%0${len}d", $val + 1;
+ 	} elsif ($val =~ /^0x(.+)$/) {
+ 		my $len = length $1;
+@@ -117,7 +120,7 @@ if (/^\/\*\*$/) {
+ 	$choice = undef;
+ } elsif (/^typedef enum/) {
+ 	# Start of an enum
+-	$val = 0;
++	$val = -1;
+ } elsif (/^\s+(\S+)\s+=\s+([^,\s]+)/) {
+ 	# A choice with a literal value
+ 	next unless @choices;
+-- 
+2.9.3
+
+
+From 3463fac21b8fd892a3aed2111ff41eefd492816f Mon Sep 17 00:00:00 2001
+From: Thomas Haller <thaller@redhat.com>
+Date: Wed, 4 Jan 2017 09:10:10 +0100
+Subject: [PATCH 03/11] libnm: explicitly set enum values in public
+ nm-dbus-interface.h headers
+
+Previously, due to a bug in "tools/enums-to-docbook.pl", enum values
+without explicit numeric value were wrongly parsed. That is fixed,
+but still explicitly set the value in the public header.
+
+(cherry picked from commit 9d2207b46d0f2808e9a59712862faf5c59d9fa86)
+(cherry picked from commit 4369f102f6874f879c9c6ec0325056be480279c6)
+---
+ libnm-core/nm-dbus-interface.h | 206 ++++++++++++++++++++---------------------
+ libnm-util/NetworkManager.h    | 162 ++++++++++++++++----------------
+ 2 files changed, 184 insertions(+), 184 deletions(-)
+
+diff --git a/libnm-core/nm-dbus-interface.h b/libnm-core/nm-dbus-interface.h
+index e5b1b3d..1305af2 100644
+--- a/libnm-core/nm-dbus-interface.h
++++ b/libnm-core/nm-dbus-interface.h
+@@ -104,7 +104,7 @@ typedef enum {
+ 	NM_STATE_CONNECTING       = 40,
+ 	NM_STATE_CONNECTED_LOCAL  = 50,
+ 	NM_STATE_CONNECTED_SITE   = 60,
+-	NM_STATE_CONNECTED_GLOBAL = 70
++	NM_STATE_CONNECTED_GLOBAL = 70,
+ } NMState;
+ 
+ /**
+@@ -119,11 +119,11 @@ typedef enum {
+  *   appears to be able to reach the full Internet.
+  */
+ typedef enum {
+-	NM_CONNECTIVITY_UNKNOWN,
+-	NM_CONNECTIVITY_NONE,
+-	NM_CONNECTIVITY_PORTAL,
+-	NM_CONNECTIVITY_LIMITED,
+-	NM_CONNECTIVITY_FULL
++	NM_CONNECTIVITY_UNKNOWN = 0,
++	NM_CONNECTIVITY_NONE    = 1,
++	NM_CONNECTIVITY_PORTAL  = 2,
++	NM_CONNECTIVITY_LIMITED = 3,
++	NM_CONNECTIVITY_FULL    = 4,
+ } NMConnectivityState;
+ 
+ /**
+@@ -238,7 +238,7 @@ typedef enum { /*< flags >*/
+  **/
+ typedef enum { /*< underscore_name=nm_802_11_ap_flags, flags >*/
+ 	NM_802_11_AP_FLAGS_NONE    = 0x00000000,
+-	NM_802_11_AP_FLAGS_PRIVACY = 0x00000001
++	NM_802_11_AP_FLAGS_PRIVACY = 0x00000001,
+ } NM80211ApFlags;
+ 
+ /**
+@@ -277,7 +277,7 @@ typedef enum { /*< underscore_name=nm_802_11_ap_security_flags, flags >*/
+ 	NM_802_11_AP_SEC_GROUP_TKIP      = 0x00000040,
+ 	NM_802_11_AP_SEC_GROUP_CCMP      = 0x00000080,
+ 	NM_802_11_AP_SEC_KEY_MGMT_PSK    = 0x00000100,
+-	NM_802_11_AP_SEC_KEY_MGMT_802_1X = 0x00000200
++	NM_802_11_AP_SEC_KEY_MGMT_802_1X = 0x00000200,
+ } NM80211ApSecurityFlags;
+ 
+ /**
+@@ -297,9 +297,9 @@ typedef enum { /*< underscore_name=nm_802_11_ap_security_flags, flags >*/
+  **/
+ typedef enum { /*< underscore_name=nm_802_11_mode >*/
+ 	NM_802_11_MODE_UNKNOWN = 0,
+-	NM_802_11_MODE_ADHOC,
+-	NM_802_11_MODE_INFRA,
+-	NM_802_11_MODE_AP
++	NM_802_11_MODE_ADHOC   = 1,
++	NM_802_11_MODE_INFRA   = 2,
++	NM_802_11_MODE_AP      = 3,
+ } NM80211Mode;
+ 
+ /**
+@@ -354,7 +354,7 @@ typedef enum {
+ 	NM_WIMAX_NSP_NETWORK_TYPE_UNKNOWN         = 0,
+ 	NM_WIMAX_NSP_NETWORK_TYPE_HOME            = 1,
+ 	NM_WIMAX_NSP_NETWORK_TYPE_PARTNER         = 2,
+-	NM_WIMAX_NSP_NETWORK_TYPE_ROAMING_PARTNER = 3
++	NM_WIMAX_NSP_NETWORK_TYPE_ROAMING_PARTNER = 3,
+ } NMWimaxNspNetworkType;
+ 
+ /**
+@@ -408,7 +408,7 @@ typedef enum {
+ 	NM_DEVICE_STATE_SECONDARIES  = 90,
+ 	NM_DEVICE_STATE_ACTIVATED    = 100,
+ 	NM_DEVICE_STATE_DEACTIVATING = 110,
+-	NM_DEVICE_STATE_FAILED       = 120
++	NM_DEVICE_STATE_FAILED       = 120,
+ } NMDeviceState;
+ 
+ /**
+@@ -480,69 +480,69 @@ typedef enum {
+  * Device state change reason codes
+  */
+ typedef enum {
+-	NM_DEVICE_STATE_REASON_NONE = 0,
+-	NM_DEVICE_STATE_REASON_UNKNOWN = 1,
+-	NM_DEVICE_STATE_REASON_NOW_MANAGED = 2,
+-	NM_DEVICE_STATE_REASON_NOW_UNMANAGED = 3,
+-	NM_DEVICE_STATE_REASON_CONFIG_FAILED = 4,
+-	NM_DEVICE_STATE_REASON_IP_CONFIG_UNAVAILABLE = 5,
+-	NM_DEVICE_STATE_REASON_IP_CONFIG_EXPIRED = 6,
+-	NM_DEVICE_STATE_REASON_NO_SECRETS = 7,
+-	NM_DEVICE_STATE_REASON_SUPPLICANT_DISCONNECT = 8,
+-	NM_DEVICE_STATE_REASON_SUPPLICANT_CONFIG_FAILED = 9,
+-	NM_DEVICE_STATE_REASON_SUPPLICANT_FAILED = 10,
+-	NM_DEVICE_STATE_REASON_SUPPLICANT_TIMEOUT = 11,
+-	NM_DEVICE_STATE_REASON_PPP_START_FAILED = 12,
+-	NM_DEVICE_STATE_REASON_PPP_DISCONNECT = 13,
+-	NM_DEVICE_STATE_REASON_PPP_FAILED = 14,
+-	NM_DEVICE_STATE_REASON_DHCP_START_FAILED = 15,
+-	NM_DEVICE_STATE_REASON_DHCP_ERROR = 16,
+-	NM_DEVICE_STATE_REASON_DHCP_FAILED = 17,
+-	NM_DEVICE_STATE_REASON_SHARED_START_FAILED = 18,
+-	NM_DEVICE_STATE_REASON_SHARED_FAILED = 19,
+-	NM_DEVICE_STATE_REASON_AUTOIP_START_FAILED = 20,
+-	NM_DEVICE_STATE_REASON_AUTOIP_ERROR = 21,
+-	NM_DEVICE_STATE_REASON_AUTOIP_FAILED = 22,
+-	NM_DEVICE_STATE_REASON_MODEM_BUSY = 23,
+-	NM_DEVICE_STATE_REASON_MODEM_NO_DIAL_TONE = 24,
+-	NM_DEVICE_STATE_REASON_MODEM_NO_CARRIER = 25,
+-	NM_DEVICE_STATE_REASON_MODEM_DIAL_TIMEOUT = 26,
+-	NM_DEVICE_STATE_REASON_MODEM_DIAL_FAILED = 27,
+-	NM_DEVICE_STATE_REASON_MODEM_INIT_FAILED = 28,
+-	NM_DEVICE_STATE_REASON_GSM_APN_FAILED = 29,
++	NM_DEVICE_STATE_REASON_NONE                           = 0,
++	NM_DEVICE_STATE_REASON_UNKNOWN                        = 1,
++	NM_DEVICE_STATE_REASON_NOW_MANAGED                    = 2,
++	NM_DEVICE_STATE_REASON_NOW_UNMANAGED                  = 3,
++	NM_DEVICE_STATE_REASON_CONFIG_FAILED                  = 4,
++	NM_DEVICE_STATE_REASON_IP_CONFIG_UNAVAILABLE          = 5,
++	NM_DEVICE_STATE_REASON_IP_CONFIG_EXPIRED              = 6,
++	NM_DEVICE_STATE_REASON_NO_SECRETS                     = 7,
++	NM_DEVICE_STATE_REASON_SUPPLICANT_DISCONNECT          = 8,
++	NM_DEVICE_STATE_REASON_SUPPLICANT_CONFIG_FAILED       = 9,
++	NM_DEVICE_STATE_REASON_SUPPLICANT_FAILED              = 10,
++	NM_DEVICE_STATE_REASON_SUPPLICANT_TIMEOUT             = 11,
++	NM_DEVICE_STATE_REASON_PPP_START_FAILED               = 12,
++	NM_DEVICE_STATE_REASON_PPP_DISCONNECT                 = 13,
++	NM_DEVICE_STATE_REASON_PPP_FAILED                     = 14,
++	NM_DEVICE_STATE_REASON_DHCP_START_FAILED              = 15,
++	NM_DEVICE_STATE_REASON_DHCP_ERROR                     = 16,
++	NM_DEVICE_STATE_REASON_DHCP_FAILED                    = 17,
++	NM_DEVICE_STATE_REASON_SHARED_START_FAILED            = 18,
++	NM_DEVICE_STATE_REASON_SHARED_FAILED                  = 19,
++	NM_DEVICE_STATE_REASON_AUTOIP_START_FAILED            = 20,
++	NM_DEVICE_STATE_REASON_AUTOIP_ERROR                   = 21,
++	NM_DEVICE_STATE_REASON_AUTOIP_FAILED                  = 22,
++	NM_DEVICE_STATE_REASON_MODEM_BUSY                     = 23,
++	NM_DEVICE_STATE_REASON_MODEM_NO_DIAL_TONE             = 24,
++	NM_DEVICE_STATE_REASON_MODEM_NO_CARRIER               = 25,
++	NM_DEVICE_STATE_REASON_MODEM_DIAL_TIMEOUT             = 26,
++	NM_DEVICE_STATE_REASON_MODEM_DIAL_FAILED              = 27,
++	NM_DEVICE_STATE_REASON_MODEM_INIT_FAILED              = 28,
++	NM_DEVICE_STATE_REASON_GSM_APN_FAILED                 = 29,
+ 	NM_DEVICE_STATE_REASON_GSM_REGISTRATION_NOT_SEARCHING = 30,
+-	NM_DEVICE_STATE_REASON_GSM_REGISTRATION_DENIED = 31,
+-	NM_DEVICE_STATE_REASON_GSM_REGISTRATION_TIMEOUT = 32,
+-	NM_DEVICE_STATE_REASON_GSM_REGISTRATION_FAILED = 33,
+-	NM_DEVICE_STATE_REASON_GSM_PIN_CHECK_FAILED = 34,
+-	NM_DEVICE_STATE_REASON_FIRMWARE_MISSING = 35,
+-	NM_DEVICE_STATE_REASON_REMOVED = 36,
+-	NM_DEVICE_STATE_REASON_SLEEPING = 37,
+-	NM_DEVICE_STATE_REASON_CONNECTION_REMOVED = 38,
+-	NM_DEVICE_STATE_REASON_USER_REQUESTED = 39,
+-	NM_DEVICE_STATE_REASON_CARRIER = 40,
+-	NM_DEVICE_STATE_REASON_CONNECTION_ASSUMED = 41,
+-	NM_DEVICE_STATE_REASON_SUPPLICANT_AVAILABLE = 42,
+-	NM_DEVICE_STATE_REASON_MODEM_NOT_FOUND = 43,
+-	NM_DEVICE_STATE_REASON_BT_FAILED = 44,
+-	NM_DEVICE_STATE_REASON_GSM_SIM_NOT_INSERTED = 45,
+-	NM_DEVICE_STATE_REASON_GSM_SIM_PIN_REQUIRED = 46,
+-	NM_DEVICE_STATE_REASON_GSM_SIM_PUK_REQUIRED = 47,
+-	NM_DEVICE_STATE_REASON_GSM_SIM_WRONG = 48,
+-	NM_DEVICE_STATE_REASON_INFINIBAND_MODE = 49,
+-	NM_DEVICE_STATE_REASON_DEPENDENCY_FAILED = 50,
+-	NM_DEVICE_STATE_REASON_BR2684_FAILED = 51,
+-	NM_DEVICE_STATE_REASON_MODEM_MANAGER_UNAVAILABLE = 52,
+-	NM_DEVICE_STATE_REASON_SSID_NOT_FOUND = 53,
+-	NM_DEVICE_STATE_REASON_SECONDARY_CONNECTION_FAILED = 54,
+-	NM_DEVICE_STATE_REASON_DCB_FCOE_FAILED = 55,
+-	NM_DEVICE_STATE_REASON_TEAMD_CONTROL_FAILED = 56,
+-	NM_DEVICE_STATE_REASON_MODEM_FAILED = 57,
+-	NM_DEVICE_STATE_REASON_MODEM_AVAILABLE = 58,
+-	NM_DEVICE_STATE_REASON_SIM_PIN_INCORRECT = 59,
+-	NM_DEVICE_STATE_REASON_NEW_ACTIVATION = 60,
+-	NM_DEVICE_STATE_REASON_PARENT_CHANGED = 61,
+-	NM_DEVICE_STATE_REASON_PARENT_MANAGED_CHANGED = 62,
++	NM_DEVICE_STATE_REASON_GSM_REGISTRATION_DENIED        = 31,
++	NM_DEVICE_STATE_REASON_GSM_REGISTRATION_TIMEOUT       = 32,
++	NM_DEVICE_STATE_REASON_GSM_REGISTRATION_FAILED        = 33,
++	NM_DEVICE_STATE_REASON_GSM_PIN_CHECK_FAILED           = 34,
++	NM_DEVICE_STATE_REASON_FIRMWARE_MISSING               = 35,
++	NM_DEVICE_STATE_REASON_REMOVED                        = 36,
++	NM_DEVICE_STATE_REASON_SLEEPING                       = 37,
++	NM_DEVICE_STATE_REASON_CONNECTION_REMOVED             = 38,
++	NM_DEVICE_STATE_REASON_USER_REQUESTED                 = 39,
++	NM_DEVICE_STATE_REASON_CARRIER                        = 40,
++	NM_DEVICE_STATE_REASON_CONNECTION_ASSUMED             = 41,
++	NM_DEVICE_STATE_REASON_SUPPLICANT_AVAILABLE           = 42,
++	NM_DEVICE_STATE_REASON_MODEM_NOT_FOUND                = 43,
++	NM_DEVICE_STATE_REASON_BT_FAILED                      = 44,
++	NM_DEVICE_STATE_REASON_GSM_SIM_NOT_INSERTED           = 45,
++	NM_DEVICE_STATE_REASON_GSM_SIM_PIN_REQUIRED           = 46,
++	NM_DEVICE_STATE_REASON_GSM_SIM_PUK_REQUIRED           = 47,
++	NM_DEVICE_STATE_REASON_GSM_SIM_WRONG                  = 48,
++	NM_DEVICE_STATE_REASON_INFINIBAND_MODE                = 49,
++	NM_DEVICE_STATE_REASON_DEPENDENCY_FAILED              = 50,
++	NM_DEVICE_STATE_REASON_BR2684_FAILED                  = 51,
++	NM_DEVICE_STATE_REASON_MODEM_MANAGER_UNAVAILABLE      = 52,
++	NM_DEVICE_STATE_REASON_SSID_NOT_FOUND                 = 53,
++	NM_DEVICE_STATE_REASON_SECONDARY_CONNECTION_FAILED    = 54,
++	NM_DEVICE_STATE_REASON_DCB_FCOE_FAILED                = 55,
++	NM_DEVICE_STATE_REASON_TEAMD_CONTROL_FAILED           = 56,
++	NM_DEVICE_STATE_REASON_MODEM_FAILED                   = 57,
++	NM_DEVICE_STATE_REASON_MODEM_AVAILABLE                = 58,
++	NM_DEVICE_STATE_REASON_SIM_PIN_INCORRECT              = 59,
++	NM_DEVICE_STATE_REASON_NEW_ACTIVATION                 = 60,
++	NM_DEVICE_STATE_REASON_PARENT_CHANGED                 = 61,
++	NM_DEVICE_STATE_REASON_PARENT_MANAGED_CHANGED         = 62,
+ } NMDeviceStateReason;
+ 
+ /**
+@@ -579,11 +579,11 @@ typedef enum {
+  * network.
+  **/
+ typedef enum {
+-	NM_ACTIVE_CONNECTION_STATE_UNKNOWN = 0,
+-	NM_ACTIVE_CONNECTION_STATE_ACTIVATING,
+-	NM_ACTIVE_CONNECTION_STATE_ACTIVATED,
+-	NM_ACTIVE_CONNECTION_STATE_DEACTIVATING,
+-	NM_ACTIVE_CONNECTION_STATE_DEACTIVATED
++	NM_ACTIVE_CONNECTION_STATE_UNKNOWN      = 0,
++	NM_ACTIVE_CONNECTION_STATE_ACTIVATING   = 1,
++	NM_ACTIVE_CONNECTION_STATE_ACTIVATED    = 2,
++	NM_ACTIVE_CONNECTION_STATE_DEACTIVATING = 3,
++	NM_ACTIVE_CONNECTION_STATE_DEACTIVATED  = 4,
+ } NMActiveConnectionState;
+ 
+ /**
+@@ -610,14 +610,14 @@ typedef enum {
+  * #NMSecretAgentGetSecretsFlags values modify the behavior of a GetSecrets request.
+  */
+ typedef enum { /*< flags >*/
+-	NM_SECRET_AGENT_GET_SECRETS_FLAG_NONE = 0x0,
++	NM_SECRET_AGENT_GET_SECRETS_FLAG_NONE              = 0x0,
+ 	NM_SECRET_AGENT_GET_SECRETS_FLAG_ALLOW_INTERACTION = 0x1,
+-	NM_SECRET_AGENT_GET_SECRETS_FLAG_REQUEST_NEW = 0x2,
+-	NM_SECRET_AGENT_GET_SECRETS_FLAG_USER_REQUESTED = 0x4,
++	NM_SECRET_AGENT_GET_SECRETS_FLAG_REQUEST_NEW       = 0x2,
++	NM_SECRET_AGENT_GET_SECRETS_FLAG_USER_REQUESTED    = 0x4,
+ 
+ 	/* Internal to NM; not part of the D-Bus API */
+-	NM_SECRET_AGENT_GET_SECRETS_FLAG_ONLY_SYSTEM = 0x80000000,
+-	NM_SECRET_AGENT_GET_SECRETS_FLAG_NO_ERRORS = 0x40000000,
++	NM_SECRET_AGENT_GET_SECRETS_FLAG_ONLY_SYSTEM       = 0x80000000,
++	NM_SECRET_AGENT_GET_SECRETS_FLAG_NO_ERRORS         = 0x40000000,
+ } NMSecretAgentGetSecretsFlags;
+ 
+ /**
+@@ -630,33 +630,33 @@ typedef enum { /*< flags >*/
+  * #NMSecretAgentCapabilities indicate various capabilities of the agent.
+  */
+ typedef enum /*< flags >*/ {
+-	NM_SECRET_AGENT_CAPABILITY_NONE = 0x0,
++	NM_SECRET_AGENT_CAPABILITY_NONE      = 0x0,
+ 	NM_SECRET_AGENT_CAPABILITY_VPN_HINTS = 0x1,
+ 
+ 	/* boundary value */
+-	NM_SECRET_AGENT_CAPABILITY_LAST = NM_SECRET_AGENT_CAPABILITY_VPN_HINTS
++	NM_SECRET_AGENT_CAPABILITY_LAST      = NM_SECRET_AGENT_CAPABILITY_VPN_HINTS,
+ } NMSecretAgentCapabilities;
+ 
+ #ifndef NM_VERSION_H
+ #undef NM_AVAILABLE_IN_1_2
+ #endif
+ 
+-#define NM_LLDP_ATTR_DESTINATION "destination"
+-#define NM_LLDP_ATTR_CHASSIS_ID_TYPE "chassis-id-type"
+-#define NM_LLDP_ATTR_CHASSIS_ID "chassis-id"
+-#define NM_LLDP_ATTR_PORT_ID_TYPE "port-id-type"
+-#define NM_LLDP_ATTR_PORT_ID "port-id"
+-#define NM_LLDP_ATTR_PORT_DESCRIPTION "port-description"
+-#define NM_LLDP_ATTR_SYSTEM_NAME "system-name"
+-#define NM_LLDP_ATTR_SYSTEM_DESCRIPTION "system-description"
+-#define NM_LLDP_ATTR_SYSTEM_CAPABILITIES "system-capabilities"
+-#define NM_LLDP_ATTR_IEEE_802_1_PVID "ieee-802-1-pvid"
+-#define NM_LLDP_ATTR_IEEE_802_1_PPVID "ieee-802-1-ppvid"
+-#define NM_LLDP_ATTR_IEEE_802_1_PPVID_FLAGS "ieee-802-1-ppvid-flags"
+-#define NM_LLDP_ATTR_IEEE_802_1_VID "ieee-802-1-vid"
+-#define NM_LLDP_ATTR_IEEE_802_1_VLAN_NAME "ieee-802-1-vlan-name"
+-
+-#define NM_LLDP_DEST_NEAREST_BRIDGE "nearest-bridge"
++#define NM_LLDP_ATTR_DESTINATION             "destination"
++#define NM_LLDP_ATTR_CHASSIS_ID_TYPE         "chassis-id-type"
++#define NM_LLDP_ATTR_CHASSIS_ID              "chassis-id"
++#define NM_LLDP_ATTR_PORT_ID_TYPE            "port-id-type"
++#define NM_LLDP_ATTR_PORT_ID                 "port-id"
++#define NM_LLDP_ATTR_PORT_DESCRIPTION        "port-description"
++#define NM_LLDP_ATTR_SYSTEM_NAME             "system-name"
++#define NM_LLDP_ATTR_SYSTEM_DESCRIPTION      "system-description"
++#define NM_LLDP_ATTR_SYSTEM_CAPABILITIES     "system-capabilities"
++#define NM_LLDP_ATTR_IEEE_802_1_PVID         "ieee-802-1-pvid"
++#define NM_LLDP_ATTR_IEEE_802_1_PPVID        "ieee-802-1-ppvid"
++#define NM_LLDP_ATTR_IEEE_802_1_PPVID_FLAGS  "ieee-802-1-ppvid-flags"
++#define NM_LLDP_ATTR_IEEE_802_1_VID          "ieee-802-1-vid"
++#define NM_LLDP_ATTR_IEEE_802_1_VLAN_NAME    "ieee-802-1-vlan-name"
++
++#define NM_LLDP_DEST_NEAREST_BRIDGE          "nearest-bridge"
+ #define NM_LLDP_DEST_NEAREST_NON_TPMR_BRIDGE "nearest-non-tpmr-bridge"
+ #define NM_LLDP_DEST_NEAREST_CUSTOMER_BRIDGE "nearest-customer-bridge"
+ 
+diff --git a/libnm-util/NetworkManager.h b/libnm-util/NetworkManager.h
+index 9053fad..77c09ae 100644
+--- a/libnm-util/NetworkManager.h
++++ b/libnm-util/NetworkManager.h
+@@ -101,7 +101,7 @@ typedef enum {
+ 	NM_STATE_CONNECTING       = 40,
+ 	NM_STATE_CONNECTED_LOCAL  = 50,
+ 	NM_STATE_CONNECTED_SITE   = 60,
+-	NM_STATE_CONNECTED_GLOBAL = 70
++	NM_STATE_CONNECTED_GLOBAL = 70,
+ } NMState;
+ 
+ /* For backwards compat */
+@@ -121,11 +121,11 @@ typedef enum {
+  * Since: 0.9.8.6
+  */
+ typedef enum {
+-	NM_CONNECTIVITY_UNKNOWN,
+-	NM_CONNECTIVITY_NONE,
+-	NM_CONNECTIVITY_PORTAL,
+-	NM_CONNECTIVITY_LIMITED,
+-	NM_CONNECTIVITY_FULL
++	NM_CONNECTIVITY_UNKNOWN = 0,
++	NM_CONNECTIVITY_NONE    = 1,
++	NM_CONNECTIVITY_PORTAL  = 2,
++	NM_CONNECTIVITY_LIMITED = 3,
++	NM_CONNECTIVITY_FULL    = 4,
+ } NMConnectivityState;
+ 
+ /**
+@@ -240,7 +240,7 @@ typedef enum { /*< flags >*/
+  **/
+ typedef enum { /*< underscore_name=nm_802_11_ap_flags, flags >*/
+ 	NM_802_11_AP_FLAGS_NONE    = 0x00000000,
+-	NM_802_11_AP_FLAGS_PRIVACY = 0x00000001
++	NM_802_11_AP_FLAGS_PRIVACY = 0x00000001,
+ } NM80211ApFlags;
+ 
+ /**
+@@ -279,7 +279,7 @@ typedef enum { /*< underscore_name=nm_802_11_ap_security_flags, flags >*/
+ 	NM_802_11_AP_SEC_GROUP_TKIP      = 0x00000040,
+ 	NM_802_11_AP_SEC_GROUP_CCMP      = 0x00000080,
+ 	NM_802_11_AP_SEC_KEY_MGMT_PSK    = 0x00000100,
+-	NM_802_11_AP_SEC_KEY_MGMT_802_1X = 0x00000200
++	NM_802_11_AP_SEC_KEY_MGMT_802_1X = 0x00000200,
+ } NM80211ApSecurityFlags;
+ 
+ /**
+@@ -299,9 +299,9 @@ typedef enum { /*< underscore_name=nm_802_11_ap_security_flags, flags >*/
+  **/
+ typedef enum { /*< underscore_name=nm_802_11_mode >*/
+ 	NM_802_11_MODE_UNKNOWN = 0,
+-	NM_802_11_MODE_ADHOC,
+-	NM_802_11_MODE_INFRA,
+-	NM_802_11_MODE_AP
++	NM_802_11_MODE_ADHOC   = 1,
++	NM_802_11_MODE_INFRA   = 2,
++	NM_802_11_MODE_AP      = 3,
+ } NM80211Mode;
+ 
+ /**
+@@ -395,7 +395,7 @@ typedef enum {
+ 	NM_DEVICE_STATE_SECONDARIES  = 90,
+ 	NM_DEVICE_STATE_ACTIVATED    = 100,
+ 	NM_DEVICE_STATE_DEACTIVATING = 110,
+-	NM_DEVICE_STATE_FAILED       = 120
++	NM_DEVICE_STATE_FAILED       = 120,
+ } NMDeviceState;
+ 
+ 
+@@ -468,71 +468,71 @@ typedef enum {
+  * Device state change reason codes
+  */
+ typedef enum {
+-	NM_DEVICE_STATE_REASON_NONE = 0,
+-	NM_DEVICE_STATE_REASON_UNKNOWN = 1,
+-	NM_DEVICE_STATE_REASON_NOW_MANAGED = 2,
+-	NM_DEVICE_STATE_REASON_NOW_UNMANAGED = 3,
+-	NM_DEVICE_STATE_REASON_CONFIG_FAILED = 4,
+-	NM_DEVICE_STATE_REASON_IP_CONFIG_UNAVAILABLE = 5,
+-	NM_DEVICE_STATE_REASON_IP_CONFIG_EXPIRED = 6,
+-	NM_DEVICE_STATE_REASON_NO_SECRETS = 7,
+-	NM_DEVICE_STATE_REASON_SUPPLICANT_DISCONNECT = 8,
+-	NM_DEVICE_STATE_REASON_SUPPLICANT_CONFIG_FAILED = 9,
+-	NM_DEVICE_STATE_REASON_SUPPLICANT_FAILED = 10,
+-	NM_DEVICE_STATE_REASON_SUPPLICANT_TIMEOUT = 11,
+-	NM_DEVICE_STATE_REASON_PPP_START_FAILED = 12,
+-	NM_DEVICE_STATE_REASON_PPP_DISCONNECT = 13,
+-	NM_DEVICE_STATE_REASON_PPP_FAILED = 14,
+-	NM_DEVICE_STATE_REASON_DHCP_START_FAILED = 15,
+-	NM_DEVICE_STATE_REASON_DHCP_ERROR = 16,
+-	NM_DEVICE_STATE_REASON_DHCP_FAILED = 17,
+-	NM_DEVICE_STATE_REASON_SHARED_START_FAILED = 18,
+-	NM_DEVICE_STATE_REASON_SHARED_FAILED = 19,
+-	NM_DEVICE_STATE_REASON_AUTOIP_START_FAILED = 20,
+-	NM_DEVICE_STATE_REASON_AUTOIP_ERROR = 21,
+-	NM_DEVICE_STATE_REASON_AUTOIP_FAILED = 22,
+-	NM_DEVICE_STATE_REASON_MODEM_BUSY = 23,
+-	NM_DEVICE_STATE_REASON_MODEM_NO_DIAL_TONE = 24,
+-	NM_DEVICE_STATE_REASON_MODEM_NO_CARRIER = 25,
+-	NM_DEVICE_STATE_REASON_MODEM_DIAL_TIMEOUT = 26,
+-	NM_DEVICE_STATE_REASON_MODEM_DIAL_FAILED = 27,
+-	NM_DEVICE_STATE_REASON_MODEM_INIT_FAILED = 28,
+-	NM_DEVICE_STATE_REASON_GSM_APN_FAILED = 29,
++	NM_DEVICE_STATE_REASON_NONE                           = 0,
++	NM_DEVICE_STATE_REASON_UNKNOWN                        = 1,
++	NM_DEVICE_STATE_REASON_NOW_MANAGED                    = 2,
++	NM_DEVICE_STATE_REASON_NOW_UNMANAGED                  = 3,
++	NM_DEVICE_STATE_REASON_CONFIG_FAILED                  = 4,
++	NM_DEVICE_STATE_REASON_IP_CONFIG_UNAVAILABLE          = 5,
++	NM_DEVICE_STATE_REASON_IP_CONFIG_EXPIRED              = 6,
++	NM_DEVICE_STATE_REASON_NO_SECRETS                     = 7,
++	NM_DEVICE_STATE_REASON_SUPPLICANT_DISCONNECT          = 8,
++	NM_DEVICE_STATE_REASON_SUPPLICANT_CONFIG_FAILED       = 9,
++	NM_DEVICE_STATE_REASON_SUPPLICANT_FAILED              = 10,
++	NM_DEVICE_STATE_REASON_SUPPLICANT_TIMEOUT             = 11,
++	NM_DEVICE_STATE_REASON_PPP_START_FAILED               = 12,
++	NM_DEVICE_STATE_REASON_PPP_DISCONNECT                 = 13,
++	NM_DEVICE_STATE_REASON_PPP_FAILED                     = 14,
++	NM_DEVICE_STATE_REASON_DHCP_START_FAILED              = 15,
++	NM_DEVICE_STATE_REASON_DHCP_ERROR                     = 16,
++	NM_DEVICE_STATE_REASON_DHCP_FAILED                    = 17,
++	NM_DEVICE_STATE_REASON_SHARED_START_FAILED            = 18,
++	NM_DEVICE_STATE_REASON_SHARED_FAILED                  = 19,
++	NM_DEVICE_STATE_REASON_AUTOIP_START_FAILED            = 20,
++	NM_DEVICE_STATE_REASON_AUTOIP_ERROR                   = 21,
++	NM_DEVICE_STATE_REASON_AUTOIP_FAILED                  = 22,
++	NM_DEVICE_STATE_REASON_MODEM_BUSY                     = 23,
++	NM_DEVICE_STATE_REASON_MODEM_NO_DIAL_TONE             = 24,
++	NM_DEVICE_STATE_REASON_MODEM_NO_CARRIER               = 25,
++	NM_DEVICE_STATE_REASON_MODEM_DIAL_TIMEOUT             = 26,
++	NM_DEVICE_STATE_REASON_MODEM_DIAL_FAILED              = 27,
++	NM_DEVICE_STATE_REASON_MODEM_INIT_FAILED              = 28,
++	NM_DEVICE_STATE_REASON_GSM_APN_FAILED                 = 29,
+ 	NM_DEVICE_STATE_REASON_GSM_REGISTRATION_NOT_SEARCHING = 30,
+-	NM_DEVICE_STATE_REASON_GSM_REGISTRATION_DENIED = 31,
+-	NM_DEVICE_STATE_REASON_GSM_REGISTRATION_TIMEOUT = 32,
+-	NM_DEVICE_STATE_REASON_GSM_REGISTRATION_FAILED = 33,
+-	NM_DEVICE_STATE_REASON_GSM_PIN_CHECK_FAILED = 34,
+-	NM_DEVICE_STATE_REASON_FIRMWARE_MISSING = 35,
+-	NM_DEVICE_STATE_REASON_REMOVED = 36,
+-	NM_DEVICE_STATE_REASON_SLEEPING = 37,
+-	NM_DEVICE_STATE_REASON_CONNECTION_REMOVED = 38,
+-	NM_DEVICE_STATE_REASON_USER_REQUESTED = 39,
+-	NM_DEVICE_STATE_REASON_CARRIER = 40,
+-	NM_DEVICE_STATE_REASON_CONNECTION_ASSUMED = 41,
+-	NM_DEVICE_STATE_REASON_SUPPLICANT_AVAILABLE = 42,
+-	NM_DEVICE_STATE_REASON_MODEM_NOT_FOUND = 43,
+-	NM_DEVICE_STATE_REASON_BT_FAILED = 44,
+-	NM_DEVICE_STATE_REASON_GSM_SIM_NOT_INSERTED = 45,
+-	NM_DEVICE_STATE_REASON_GSM_SIM_PIN_REQUIRED = 46,
+-	NM_DEVICE_STATE_REASON_GSM_SIM_PUK_REQUIRED = 47,
+-	NM_DEVICE_STATE_REASON_GSM_SIM_WRONG = 48,
+-	NM_DEVICE_STATE_REASON_INFINIBAND_MODE = 49,
+-	NM_DEVICE_STATE_REASON_DEPENDENCY_FAILED = 50,
+-	NM_DEVICE_STATE_REASON_BR2684_FAILED = 51,
+-	NM_DEVICE_STATE_REASON_MODEM_MANAGER_UNAVAILABLE = 52,
+-	NM_DEVICE_STATE_REASON_SSID_NOT_FOUND = 53,
+-	NM_DEVICE_STATE_REASON_SECONDARY_CONNECTION_FAILED = 54,
+-	NM_DEVICE_STATE_REASON_DCB_FCOE_FAILED = 55,
+-	NM_DEVICE_STATE_REASON_TEAMD_CONTROL_FAILED = 56,
+-	NM_DEVICE_STATE_REASON_MODEM_FAILED = 57,
+-	NM_DEVICE_STATE_REASON_MODEM_AVAILABLE = 58,
+-	NM_DEVICE_STATE_REASON_SIM_PIN_INCORRECT = 59,
+-	NM_DEVICE_STATE_REASON_NEW_ACTIVATION = 60,
+-	NM_DEVICE_STATE_REASON_PARENT_CHANGED = 61,
+-	NM_DEVICE_STATE_REASON_PARENT_MANAGED_CHANGED = 62,
+-
+-	NM_DEVICE_STATE_REASON_LAST = 0xFFFF
++	NM_DEVICE_STATE_REASON_GSM_REGISTRATION_DENIED        = 31,
++	NM_DEVICE_STATE_REASON_GSM_REGISTRATION_TIMEOUT       = 32,
++	NM_DEVICE_STATE_REASON_GSM_REGISTRATION_FAILED        = 33,
++	NM_DEVICE_STATE_REASON_GSM_PIN_CHECK_FAILED           = 34,
++	NM_DEVICE_STATE_REASON_FIRMWARE_MISSING               = 35,
++	NM_DEVICE_STATE_REASON_REMOVED                        = 36,
++	NM_DEVICE_STATE_REASON_SLEEPING                       = 37,
++	NM_DEVICE_STATE_REASON_CONNECTION_REMOVED             = 38,
++	NM_DEVICE_STATE_REASON_USER_REQUESTED                 = 39,
++	NM_DEVICE_STATE_REASON_CARRIER                        = 40,
++	NM_DEVICE_STATE_REASON_CONNECTION_ASSUMED             = 41,
++	NM_DEVICE_STATE_REASON_SUPPLICANT_AVAILABLE           = 42,
++	NM_DEVICE_STATE_REASON_MODEM_NOT_FOUND                = 43,
++	NM_DEVICE_STATE_REASON_BT_FAILED                      = 44,
++	NM_DEVICE_STATE_REASON_GSM_SIM_NOT_INSERTED           = 45,
++	NM_DEVICE_STATE_REASON_GSM_SIM_PIN_REQUIRED           = 46,
++	NM_DEVICE_STATE_REASON_GSM_SIM_PUK_REQUIRED           = 47,
++	NM_DEVICE_STATE_REASON_GSM_SIM_WRONG                  = 48,
++	NM_DEVICE_STATE_REASON_INFINIBAND_MODE                = 49,
++	NM_DEVICE_STATE_REASON_DEPENDENCY_FAILED              = 50,
++	NM_DEVICE_STATE_REASON_BR2684_FAILED                  = 51,
++	NM_DEVICE_STATE_REASON_MODEM_MANAGER_UNAVAILABLE      = 52,
++	NM_DEVICE_STATE_REASON_SSID_NOT_FOUND                 = 53,
++	NM_DEVICE_STATE_REASON_SECONDARY_CONNECTION_FAILED    = 54,
++	NM_DEVICE_STATE_REASON_DCB_FCOE_FAILED                = 55,
++	NM_DEVICE_STATE_REASON_TEAMD_CONTROL_FAILED           = 56,
++	NM_DEVICE_STATE_REASON_MODEM_FAILED                   = 57,
++	NM_DEVICE_STATE_REASON_MODEM_AVAILABLE                = 58,
++	NM_DEVICE_STATE_REASON_SIM_PIN_INCORRECT              = 59,
++	NM_DEVICE_STATE_REASON_NEW_ACTIVATION                 = 60,
++	NM_DEVICE_STATE_REASON_PARENT_CHANGED                 = 61,
++	NM_DEVICE_STATE_REASON_PARENT_MANAGED_CHANGED         = 62,
++
++	NM_DEVICE_STATE_REASON_LAST                           = 0xFFFF,
+ } NMDeviceStateReason;
+ 
+ 
+@@ -551,11 +551,11 @@ typedef enum {
+  * network.
+  **/
+ typedef enum {
+-	NM_ACTIVE_CONNECTION_STATE_UNKNOWN = 0,
+-	NM_ACTIVE_CONNECTION_STATE_ACTIVATING,
+-	NM_ACTIVE_CONNECTION_STATE_ACTIVATED,
+-	NM_ACTIVE_CONNECTION_STATE_DEACTIVATING,
+-	NM_ACTIVE_CONNECTION_STATE_DEACTIVATED
++	NM_ACTIVE_CONNECTION_STATE_UNKNOWN      = 0,
++	NM_ACTIVE_CONNECTION_STATE_ACTIVATING   = 1,
++	NM_ACTIVE_CONNECTION_STATE_ACTIVATED    = 2,
++	NM_ACTIVE_CONNECTION_STATE_DEACTIVATING = 3,
++	NM_ACTIVE_CONNECTION_STATE_DEACTIVATED  = 4,
+ } NMActiveConnectionState;
+ 
+ #endif /* NETWORK_MANAGER_H */
+-- 
+2.9.3
+
+
+From f69739cc6052b41a98b081255f99db65f733664c Mon Sep 17 00:00:00 2001
+From: Lubomir Rintel <lkundrak@v3.sk>
+Date: Fri, 14 Oct 2016 19:57:34 +0200
+Subject: [PATCH 04/11] device: avoid a crash when L3 configuration fails
+
+Don't call the IP check until at either IPv4 or IPv6 is actually
+configured.
+
+(cherry picked from commit aa71dbc6c42d2c4ffaf921a8e5dd9c1175f20372)
+(cherry picked from commit 479a64a5b7b59a97dfb8d88c886943742a29d9d6)
+---
+ src/devices/nm-device.c | 6 +++++-
+ 1 file changed, 5 insertions(+), 1 deletion(-)
+
+diff --git a/src/devices/nm-device.c b/src/devices/nm-device.c
+index ac840ab..2676aac 100644
+--- a/src/devices/nm-device.c
++++ b/src/devices/nm-device.c
+@@ -6909,12 +6909,16 @@ fw_change_zone_cb_ip_check (NMFirewallManager *firewall_manager,
+                             gpointer user_data)
+ {
+ 	NMDevice *self = user_data;
++	NMDevicePrivate *priv;
+ 
+ 	if (!fw_change_zone_handle (self, call_id, error))
+ 		return;
+ 
+ 	/* FIXME: fail the device on error? */
+-	nm_device_start_ip_check (self);
++
++	priv = NM_DEVICE_GET_PRIVATE (self);
++	if (priv->ip4_state == IP_DONE || priv->ip6_state == IP_DONE)
++		nm_device_start_ip_check (self);
+ }
+ 
+ /*
+-- 
+2.9.3
+
+
+From a0f3285e7607010be09253dcede09b7f8bba7bae Mon Sep 17 00:00:00 2001
+From: Thomas Haller <thaller@redhat.com>
+Date: Wed, 21 Dec 2016 20:19:13 +0100
+Subject: [PATCH 05/11] keyfile: fix memleak in keyfile reader's
+ read_array_of_uint()
+
+Fixes: 9559a7a26021efa7ef49681b93a3b3bd4eadcef6
+(cherry picked from commit 8239edbb9b903dc802957763a8bab04480a491e1)
+(cherry picked from commit 8a281bf7b40c25c67e49661d69b38401d64b03c9)
+---
+ libnm-core/nm-keyfile-reader.c | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/libnm-core/nm-keyfile-reader.c b/libnm-core/nm-keyfile-reader.c
+index 16f0c22..b3ac8f3 100644
+--- a/libnm-core/nm-keyfile-reader.c
++++ b/libnm-core/nm-keyfile-reader.c
+@@ -111,7 +111,7 @@ read_array_of_uint (GKeyFile *file,
+ 	GArray *array = NULL;
+ 	gsize length;
+ 	int i;
+-	gint *tmp;
++	gs_free int *tmp = NULL;
+ 
+ 	tmp = nm_keyfile_plugin_kf_get_integer_list (file, nm_setting_get_name (setting), key, &length, NULL);
+ 	array = g_array_sized_new (FALSE, FALSE, sizeof (guint32), length);
+-- 
+2.9.3
+
+
+From a5e5d0ce3f11141330f2e94f3d6187d1a1a842c1 Mon Sep 17 00:00:00 2001
+From: Beniamino Galvani <bgalvani@redhat.com>
+Date: Thu, 5 Jan 2017 13:59:50 +0100
+Subject: [PATCH 06/11] vpn: add device route to VPN gateway if parent has no
+ gateway
+
+We set a dedicated route to reach the VPN gateway only if the parent
+device has a gateway. If the parent device doesn't have a gateway (for
+example in case of GSM connections) and the VPN gets the default
+route, the VPN gateway will be contacted through the VPN itself, which
+obviously doesn't work.
+
+Set up a device route if the parent device doesn't provide a gateway.
+
+https://bugzilla.redhat.com/show_bug.cgi?id=1403660
+(cherry picked from commit ae5adc9e21c642a198868b519b2a278b0b108ab8)
+(cherry picked from commit 48db5806f3a99f6cac526fecd6df5a090b53c192)
+---
+ src/vpn-manager/nm-vpn-connection.c | 30 ++++++++++++++++--------------
+ 1 file changed, 16 insertions(+), 14 deletions(-)
+
+diff --git a/src/vpn-manager/nm-vpn-connection.c b/src/vpn-manager/nm-vpn-connection.c
+index 1441c3c..78f6c71 100644
+--- a/src/vpn-manager/nm-vpn-connection.c
++++ b/src/vpn-manager/nm-vpn-connection.c
+@@ -683,12 +683,9 @@ add_ip4_vpn_gateway_route (NMIP4Config *config, NMDevice *parent_device, guint32
+ 	/* Set up a route to the VPN gateway's public IP address through the default
+ 	 * network device if the VPN gateway is on a different subnet.
+ 	 */
+-
+ 	parent_config = nm_device_get_ip4_config (parent_device);
+ 	g_return_if_fail (parent_config != NULL);
+ 	parent_gw = nm_ip4_config_get_gateway (parent_config);
+-	if (!parent_gw)
+-		return;
+ 
+ 	route_metric = nm_device_get_ip4_route_metric (parent_device);
+ 
+@@ -696,6 +693,9 @@ add_ip4_vpn_gateway_route (NMIP4Config *config, NMDevice *parent_device, guint32
+ 	route.network = vpn_gw;
+ 	route.plen = 32;
+ 	route.gateway = parent_gw;
++	/* Set up a device route if the parent device has no gateway */
++	if (!parent_gw)
++		route.ifindex = nm_device_get_ip_ifindex (parent_device);
+ 
+ 	/* If the VPN gateway is in the same subnet as one of the parent device's
+ 	 * IP addresses, don't add the host route to it, but a route through the
+@@ -708,18 +708,20 @@ add_ip4_vpn_gateway_route (NMIP4Config *config, NMDevice *parent_device, guint32
+ 	route.metric = route_metric;
+ 	nm_ip4_config_add_route (config, &route);
+ 
+-	/* Ensure there's a route to the parent device's gateway through the
+-	 * parent device, since if the VPN claims the default route and the VPN
+-	 * routes include a subnet that matches the parent device's subnet,
+-	 * the parent device's gateway would get routed through the VPN and fail.
+-	 */
+-	memset (&route, 0, sizeof (route));
+-	route.network = parent_gw;
+-	route.plen = 32;
+-	route.rt_source = NM_IP_CONFIG_SOURCE_VPN;
+-	route.metric = route_metric;
++	if (parent_gw) {
++		/* Ensure there's a route to the parent device's gateway through the
++		 * parent device, since if the VPN claims the default route and the VPN
++		 * routes include a subnet that matches the parent device's subnet,
++		 * the parent device's gateway would get routed through the VPN and fail.
++		 */
++		memset (&route, 0, sizeof (route));
++		route.network = parent_gw;
++		route.plen = 32;
++		route.rt_source = NM_IP_CONFIG_SOURCE_VPN;
++		route.metric = route_metric;
+ 
+-	nm_ip4_config_add_route (config, &route);
++		nm_ip4_config_add_route (config, &route);
++	}
+ }
+ 
+ static void
+-- 
+2.9.3
+
+
+From 7957529b61654f0051dbd84557fcd357d33c48e9 Mon Sep 17 00:00:00 2001
+From: Thomas Haller <thaller@redhat.com>
+Date: Fri, 6 Jan 2017 11:54:47 +0100
+Subject: [PATCH 07/11] keyfile: fix interpreting missing
+ wifi.mac-address-randomization as permanent address
+
+With commit 4f6c91d6962cc031f07e52bb31adde560ad70fac, we aimed to
+enable mac-address-randomization by default for Wi-Fi. That however
+is not possible by default because it breaks various scenarios.
+Also, later wifi.mac-address-randomization was deprecated in favor
+of wifi.cloned-mac-address setting.
+
+Both wifi.mac-address-randomization and wifi.cloned-mac-address support
+global default values, so it is wrong to read a missing
+mac-address-randomization as "NEVER" -- which due to
+normalization also results in cloned-mac-address=permanent.
+
+(cherry picked from commit 46d53e11012c047e09d04f663c1c36e6c47dc298)
+(cherry picked from commit 2a960d3936d78087d74ba556df8ac808639c96a0)
+---
+ libnm-core/nm-keyfile-reader.c | 5 -----
+ libnm-core/nm-keyfile-writer.c | 3 ---
+ 2 files changed, 8 deletions(-)
+
+diff --git a/libnm-core/nm-keyfile-reader.c b/libnm-core/nm-keyfile-reader.c
+index b3ac8f3..aee128b 100644
+--- a/libnm-core/nm-keyfile-reader.c
++++ b/libnm-core/nm-keyfile-reader.c
+@@ -1318,11 +1318,6 @@ static void
+ set_default_for_missing_key (NMSetting *setting, const char *property)
+ {
+ 	/* Set a value different from the default value of the property's spec */
+-
+-	if (NM_IS_SETTING_WIRELESS (setting)) {
+-		if (!strcmp (property, NM_SETTING_WIRELESS_MAC_ADDRESS_RANDOMIZATION))
+-			g_object_set (setting, property, (NMSettingMacRandomization) NM_SETTING_MAC_RANDOMIZATION_NEVER, NULL);
+-	}
+ }
+ 
+ static void
+diff --git a/libnm-core/nm-keyfile-writer.c b/libnm-core/nm-keyfile-writer.c
+index e0e6ba4..37e7cd0 100644
+--- a/libnm-core/nm-keyfile-writer.c
++++ b/libnm-core/nm-keyfile-writer.c
+@@ -627,9 +627,6 @@ can_omit_default_value (NMSetting *setting, const char *property)
+ 	} else if (NM_IS_SETTING_IP6_CONFIG (setting)) {
+ 		if (!strcmp (property, NM_SETTING_IP6_CONFIG_ADDR_GEN_MODE))
+ 			return FALSE;
+-	} else if (NM_IS_SETTING_WIRELESS (setting)) {
+-		if (!strcmp (property, NM_SETTING_WIRELESS_MAC_ADDRESS_RANDOMIZATION))
+-			return FALSE;
+ 	}
+ 
+ 	return TRUE;
+-- 
+2.9.3
+
+
+From ad25eaa56bf4d227e68d90441e73cf04a38f5570 Mon Sep 17 00:00:00 2001
+From: Beniamino Galvani <bgalvani@redhat.com>
+Date: Tue, 3 Jan 2017 13:54:09 +0100
+Subject: [PATCH 08/11] settings: fix assertion when changing connection
+ managed state
+
+When a ifcfg-rh connection becomes unamanaged it is removed from the
+connection list in NMSettings and marked as removed; it is however
+kept alive in the plugin and can become managed again later. To avoid
+failed assertions, the @removed flag of the NMSettingsConnection must
+be cleared if the connection is not being disposed.
+
+(cherry picked from commit a9384452ed61ca3f1c6e1db175f499307da9c388)
+(cherry picked from commit fc56eff0aee72d1bb239de3e32620cd7679b5e86)
+---
+ src/settings/nm-settings-connection.c  | 12 +++++++-----
+ src/settings/nm-settings-connection.h  |  2 +-
+ src/settings/plugins/ifcfg-rh/plugin.c |  4 ++--
+ src/settings/plugins/ifnet/plugin.c    |  4 ++--
+ src/settings/plugins/keyfile/plugin.c  |  2 +-
+ 5 files changed, 13 insertions(+), 11 deletions(-)
+
+diff --git a/src/settings/nm-settings-connection.c b/src/settings/nm-settings-connection.c
+index f22807d..1aab5b8 100644
+--- a/src/settings/nm-settings-connection.c
++++ b/src/settings/nm-settings-connection.c
+@@ -752,7 +752,7 @@ do_delete (NMSettingsConnection *self,
+ 	/* Remove connection from seen-bssids database file */
+ 	remove_entry_from_db (self, "seen-bssids");
+ 
+-	nm_settings_connection_signal_remove (self);
++	nm_settings_connection_signal_remove (self, FALSE);
+ 
+ 	callback (self, NULL, user_data);
+ 
+@@ -2087,13 +2087,15 @@ impl_settings_connection_clear_secrets (NMSettingsConnection *self,
+ /**************************************************************/
+ 
+ void
+-nm_settings_connection_signal_remove (NMSettingsConnection *self)
++nm_settings_connection_signal_remove (NMSettingsConnection *self, gboolean allow_reuse)
+ {
+ 	NMSettingsConnectionPrivate *priv = NM_SETTINGS_CONNECTION_GET_PRIVATE (self);
+ 
+-	if (priv->removed)
+-		g_return_if_reached ();
+-	priv->removed = TRUE;
++	if (!allow_reuse) {
++		if (priv->removed)
++			g_return_if_reached ();
++		priv->removed = TRUE;
++	}
+ 	g_signal_emit_by_name (self, NM_SETTINGS_CONNECTION_REMOVED);
+ }
+ 
+diff --git a/src/settings/nm-settings-connection.h b/src/settings/nm-settings-connection.h
+index 761203e..c515d66 100644
+--- a/src/settings/nm-settings-connection.h
++++ b/src/settings/nm-settings-connection.h
+@@ -173,7 +173,7 @@ void nm_settings_connection_recheck_visibility (NMSettingsConnection *self);
+ gboolean nm_settings_connection_check_permission (NMSettingsConnection *self,
+                                                   const char *permission);
+ 
+-void nm_settings_connection_signal_remove (NMSettingsConnection *self);
++void nm_settings_connection_signal_remove (NMSettingsConnection *self, gboolean allow_reuse);
+ 
+ gboolean nm_settings_connection_get_unsaved (NMSettingsConnection *self);
+ 
+diff --git a/src/settings/plugins/ifcfg-rh/plugin.c b/src/settings/plugins/ifcfg-rh/plugin.c
+index c2956d2..3b70bb4 100644
+--- a/src/settings/plugins/ifcfg-rh/plugin.c
++++ b/src/settings/plugins/ifcfg-rh/plugin.c
+@@ -145,7 +145,7 @@ remove_connection (SettingsPluginIfcfg *self, NMIfcfgConnection *connection)
+ 	g_object_ref (connection);
+ 	g_hash_table_remove (priv->connections, nm_connection_get_uuid (NM_CONNECTION (connection)));
+ 	if (!unmanaged && !unrecognized)
+-		nm_settings_connection_signal_remove (NM_SETTINGS_CONNECTION (connection));
++		nm_settings_connection_signal_remove (NM_SETTINGS_CONNECTION (connection), FALSE);
+ 	g_object_unref (connection);
+ 
+ 	/* Emit changes _after_ removing the connection */
+@@ -314,7 +314,7 @@ update_connection (SettingsPluginIfcfg *self,
+ 					/* Unexport the connection by telling the settings service it's
+ 					 * been removed.
+ 					 */
+-					nm_settings_connection_signal_remove (NM_SETTINGS_CONNECTION (connection_by_uuid));
++					nm_settings_connection_signal_remove (NM_SETTINGS_CONNECTION (connection_by_uuid), TRUE);
+ 					/* Remove the path so that claim_connection() doesn't complain later when
+ 					 * interface gets managed and connection is re-added. */
+ 					nm_connection_set_path (NM_CONNECTION (connection_by_uuid), NULL);
+diff --git a/src/settings/plugins/ifnet/plugin.c b/src/settings/plugins/ifnet/plugin.c
+index a0676cf..372e056 100644
+--- a/src/settings/plugins/ifnet/plugin.c
++++ b/src/settings/plugins/ifnet/plugin.c
+@@ -240,7 +240,7 @@ reload_connections (NMSettingsPlugin *config)
+ 				                              NM_SETTING_COMPARE_FLAG_IGNORE_NOT_SAVED_SECRETS)) {
+ 					nm_log_info (LOGD_SETTINGS, "Auto refreshing %s", conn_name);
+ 
+-					nm_settings_connection_signal_remove (NM_SETTINGS_CONNECTION (old));
++					nm_settings_connection_signal_remove (NM_SETTINGS_CONNECTION (old), FALSE);
+ 					track_new_connection (self, new);
+ 					if (is_managed_plugin () && is_managed (conn_name))
+ 						g_signal_emit_by_name (self, NM_SETTINGS_PLUGIN_CONNECTION_ADDED, new);
+@@ -282,7 +282,7 @@ reload_connections (NMSettingsPlugin *config)
+ 		 */
+ 		if (   nm_ifnet_connection_get_conn_name (NM_IFNET_CONNECTION (candidate))
+ 		    && !g_hash_table_lookup (new_connections, uuid)) {
+-			nm_settings_connection_signal_remove (candidate);
++			nm_settings_connection_signal_remove (candidate, FALSE);
+ 			g_hash_table_iter_remove (&iter);
+ 		}
+ 	}
+diff --git a/src/settings/plugins/keyfile/plugin.c b/src/settings/plugins/keyfile/plugin.c
+index c5598fc..539ca5b 100644
+--- a/src/settings/plugins/keyfile/plugin.c
++++ b/src/settings/plugins/keyfile/plugin.c
+@@ -82,7 +82,7 @@ remove_connection (SettingsPluginKeyfile *self, NMKeyfileConnection *connection)
+ 	g_signal_handlers_disconnect_by_func (connection, connection_removed_cb, self);
+ 	removed = g_hash_table_remove (SETTINGS_PLUGIN_KEYFILE_GET_PRIVATE (self)->connections,
+ 	                               nm_connection_get_uuid (NM_CONNECTION (connection)));
+-	nm_settings_connection_signal_remove (NM_SETTINGS_CONNECTION (connection));
++	nm_settings_connection_signal_remove (NM_SETTINGS_CONNECTION (connection), FALSE);
+ 	g_object_unref (connection);
+ 
+ 	g_return_if_fail (removed);
+-- 
+2.9.3
+
+
+From ab6ea3d185851a96dd81b4a1507f131953baf352 Mon Sep 17 00:00:00 2001
+From: Beniamino Galvani <bgalvani@redhat.com>
+Date: Mon, 9 Jan 2017 17:57:45 +0100
+Subject: [PATCH 09/11] platform: don't update IPv6 temporary addresses
+
+The kernel already takes care of adding and updating temporary
+addresses when an address with IFA_F_MANAGETEMPADDR flag is added or
+updated; doing it also in nm_platform_ip6_address_sync() can overwrite
+the changes done by kernel, especially because since commit
+0a0bca9c7fad ("ip6-config: sort addresses only when reading the
+property value") there is no guarantee that temporary addresses are
+before the public ones in the IPv6 configuration.
+
+Still delete temporary addresses, but don't add or update them.
+
+(cherry picked from commit 1dbd9d7948e61f44a56e256c4d9fe60831663861)
+(cherry picked from commit a25b3327c7ffdf528da7e47a819201e216d17829)
+---
+ src/platform/nm-platform.c | 5 +++++
+ 1 file changed, 5 insertions(+)
+
+diff --git a/src/platform/nm-platform.c b/src/platform/nm-platform.c
+index 9274a31..48965ca 100644
+--- a/src/platform/nm-platform.c
++++ b/src/platform/nm-platform.c
+@@ -2815,6 +2815,11 @@ nm_platform_ip6_address_sync (NMPlatform *self, int ifindex, const GArray *known
+ 		const NMPlatformIP6Address *known_address = &g_array_index (known_addresses, NMPlatformIP6Address, i);
+ 		guint32 lifetime, preferred;
+ 
++		if (NM_FLAGS_HAS (known_address->n_ifa_flags, IFA_F_TEMPORARY)) {
++			/* Kernel manages these */
++			continue;
++		}
++
+ 		if (!nm_utils_lifetime_get (known_address->timestamp, known_address->lifetime, known_address->preferred,
+ 		                            now, &lifetime, &preferred))
+ 			continue;
+-- 
+2.9.3
+
+
+From 61dd138be94e1360d19ae9d9d9cfe661853a7ee3 Mon Sep 17 00:00:00 2001
+From: Thomas Haller <thaller@redhat.com>
+Date: Mon, 26 Dec 2016 18:11:03 +0100
+Subject: [PATCH 10/11] device: cleanup setting of ip-iface
+
+Move the updating/setting of the ip-ifindex/ip-iface to one place.
+
+Properties should be for the most part immutable/read-only, and only
+at particular places modified. That way, it's easier to track who
+changes a property.
+
+Also, add a logging line with "ip-ifname" prefix.
+
+https://mail.gnome.org/archives/networkmanager-list/2017-January/msg00011.html
+
+(cherry picked from commit 78017f1bdc300656bba2d45e079fd638d285e909)
+(cherry picked from commit c0fa787c2882d3db754faeecad3d4efbc6f5456d)
+---
+ src/devices/nm-device.c | 104 +++++++++++++++++++++++++++++++++---------------
+ 1 file changed, 71 insertions(+), 33 deletions(-)
+
+diff --git a/src/devices/nm-device.c b/src/devices/nm-device.c
+index 2676aac..8155da0 100644
+--- a/src/devices/nm-device.c
++++ b/src/devices/nm-device.c
+@@ -742,39 +742,86 @@ void
+ nm_device_set_ip_iface (NMDevice *self, const char *iface)
+ {
+ 	NMDevicePrivate *priv;
+-	char *old_ip_iface;
++	int ifindex;
+ 
+ 	g_return_if_fail (NM_IS_DEVICE (self));
+ 
+ 	priv = NM_DEVICE_GET_PRIVATE (self);
+-	if (!g_strcmp0 (iface, priv->ip_iface))
+-		return;
+-
+-	old_ip_iface = priv->ip_iface;
+-	priv->ip_ifindex = 0;
+-
+-	priv->ip_iface = g_strdup (iface);
+-	if (priv->ip_iface) {
+-		priv->ip_ifindex = nm_platform_link_get_ifindex (NM_PLATFORM_GET, priv->ip_iface);
+-		if (priv->ip_ifindex > 0) {
+-			if (nm_platform_check_support_user_ipv6ll (NM_PLATFORM_GET))
+-				nm_platform_link_set_user_ipv6ll_enabled (NM_PLATFORM_GET, priv->ip_ifindex, TRUE);
++	if (nm_streq0 (iface, priv->ip_iface)) {
++		if (!iface)
++			return;
++		ifindex = nm_platform_link_get_ifindex (NM_PLATFORM_GET, iface);
++		if (   ifindex <= 0
++		    || priv->ip_ifindex == ifindex)
++			return;
+ 
+-			if (!nm_platform_link_is_up (NM_PLATFORM_GET, priv->ip_ifindex))
+-				nm_platform_link_set_up (NM_PLATFORM_GET, priv->ip_ifindex, NULL);
++		priv->ip_ifindex = ifindex;
++		_LOGD (LOGD_DEVICE, "ip-ifname: update ifindex for ifname '%s': %d", iface, priv->ip_ifindex);
++	} else {
++		g_free (priv->ip_iface);
++		priv->ip_iface = g_strdup (iface);
++
++		if (iface) {
++			/* The @iface name is not in sync with the platform cache.
++			 * So, there is no point asking the platform cache to resolve
++			 * the ifindex. Instead, we can only hope that the interface
++			 * with this name still exists and we resolve the ifindex
++			 * anew.
++			 *
++			 * Backport: on master, we resolve the ifname anew via if_nametoindex().
++			 *   For the backport, don't bother and look into the platform cache.
++			 */
++			priv->ip_ifindex = nm_platform_link_get_ifindex (NM_PLATFORM_GET, iface);
++			if (priv->ip_ifindex > 0)
++				_LOGD (LOGD_DEVICE, "ip-ifname: set ifname '%s', ifindex %d", iface, priv->ip_ifindex);
++			else
++				_LOGW (LOGD_DEVICE, "ip-ifname: set ifname '%s', unknown ifindex", iface);
+ 		} else {
+-			/* Device IP interface must always be a kernel network interface */
+-			_LOGW (LOGD_PLATFORM, "failed to look up interface index");
++			priv->ip_ifindex = 0;
++			_LOGD (LOGD_DEVICE, "ip-ifname: clear ifname");
+ 		}
+ 	}
+ 
++	if (priv->ip_ifindex > 0) {
++		if (nm_platform_check_support_user_ipv6ll (NM_PLATFORM_GET))
++			nm_platform_link_set_user_ipv6ll_enabled (NM_PLATFORM_GET, priv->ip_ifindex, TRUE);
++
++		if (!nm_platform_link_is_up (NM_PLATFORM_GET, priv->ip_ifindex))
++			nm_platform_link_set_up (NM_PLATFORM_GET, priv->ip_ifindex, NULL);
++	}
++
+ 	/* We don't care about any saved values from the old iface */
+ 	g_hash_table_remove_all (priv->ip6_saved_properties);
+ 
+-	/* Emit change notification */
+-	if (g_strcmp0 (old_ip_iface, priv->ip_iface))
+-		_notify (self, PROP_IP_IFACE);
+-	g_free (old_ip_iface);
++	_notify (self, PROP_IP_IFACE);
++}
++
++static gboolean
++_ip_iface_update (NMDevice *self, const char *ip_iface)
++{
++	NMDevicePrivate *priv;
++
++	g_return_val_if_fail (NM_IS_DEVICE (self), FALSE);
++
++	priv = NM_DEVICE_GET_PRIVATE (self);
++
++	g_return_val_if_fail (priv->ip_iface, FALSE);
++	g_return_val_if_fail (priv->ip_ifindex > 0, FALSE);
++	g_return_val_if_fail (ip_iface, FALSE);
++
++	if (!ip_iface[0])
++		return FALSE;
++
++	if (nm_streq (priv->ip_iface, ip_iface))
++		return FALSE;
++
++	_LOGI (LOGD_DEVICE, "ip-ifname: interface index %d renamed ip_iface (%d) from '%s' to '%s'",
++	       priv->ifindex, priv->ip_ifindex,
++	       priv->ip_iface, ip_iface);
++	g_free (priv->ip_iface);
++	priv->ip_iface = g_strdup (ip_iface);
++	_notify (self, PROP_IP_IFACE);
++	return TRUE;
+ }
+ 
+ /*****************************************************************************/
+@@ -1953,16 +2000,8 @@ device_ip_link_changed (NMDevice *self)
+ 
+ 	_stats_update_counters_from_pllink (self, pllink);
+ 
+-	if (pllink->name[0] && g_strcmp0 (priv->ip_iface, pllink->name)) {
+-		_LOGI (LOGD_DEVICE, "interface index %d renamed ip_iface (%d) from '%s' to '%s'",
+-		       priv->ifindex, nm_device_get_ip_ifindex (self),
+-		       priv->ip_iface, pllink->name);
+-		g_free (priv->ip_iface);
+-		priv->ip_iface = g_strdup (pllink->name);
+-
+-		_notify (self, PROP_IP_IFACE);
++	if (_ip_iface_update (self, pllink->name))
+ 		nm_device_update_dynamic_ip_setup (self);
+-	}
+ 
+ 	return G_SOURCE_REMOVE;
+ }
+@@ -2465,10 +2504,9 @@ nm_device_unrealize (NMDevice *self, gboolean remove_resources, GError **error)
+ 		_notify (self, PROP_IFINDEX);
+ 	}
+ 	priv->ip_ifindex = 0;
+-	if (priv->ip_iface) {
+-		g_clear_pointer (&priv->ip_iface, g_free);
++	if (nm_clear_g_free (&priv->ip_iface))
+ 		_notify (self, PROP_IP_IFACE);
+-	}
++
+ 	if (priv->driver_version) {
+ 		g_clear_pointer (&priv->driver_version, g_free);
+ 		_notify (self, PROP_DRIVER_VERSION);
+-- 
+2.9.3
+
+
+From 54b112f65ed43665333ae2b99a1c332cf35da744 Mon Sep 17 00:00:00 2001
+From: Lubomir Rintel <lkundrak@v3.sk>
+Date: Mon, 28 Nov 2016 12:32:03 +0000
+Subject: [PATCH 11/11] ifcfg-rh: write the master device name even if the
+ master property is an UUID
+
+We used MASTER, BRIDGE and TEAM_MASTER keys for a differnet purpose than the
+network.service did, confusing the legacy tooling. Let's do our best to write
+compatible configuration files:
+
+* Add *_UUID properties that won't clash with initscripts
+* Ignore non-*_UUID keys on read if *_UUID is present
+* If the connection.master is an UUID of a connection with a
+  connection.interface-name, write the uuid into the *_UUID key while setting
+  the non-*_UUID key to the interface name for compatibility
+
+https://bugzilla.redhat.com/show_bug.cgi?id=1369091
+(cherry picked from commit 8b7b0d3fc2604a2cdecb32d97f8cb3ff63a069f0)
+(cherry picked from commit b28b275c5e6c36bf7b63ed9ab7b99505de61bf98)
+---
+ libnm-core/nm-setting-connection.c     | 14 +++++++-----
+ src/nm-manager.c                       | 24 +++++++++++++++++++++
+ src/nm-manager.h                       |  3 +++
+ src/settings/plugins/ifcfg-rh/reader.c | 18 ++++++++++++----
+ src/settings/plugins/ifcfg-rh/writer.c | 39 +++++++++++++++++++++++++---------
+ 5 files changed, 79 insertions(+), 19 deletions(-)
+
+diff --git a/libnm-core/nm-setting-connection.c b/libnm-core/nm-setting-connection.c
+index f6b801c..a0a679e 100644
+--- a/libnm-core/nm-setting-connection.c
++++ b/libnm-core/nm-setting-connection.c
+@@ -1650,9 +1650,11 @@ nm_setting_connection_class_init (NMSettingConnectionClass *setting_class)
+ 	 **/
+ 	/* ---ifcfg-rh---
+ 	 * property: master
+-	 * variable: MASTER, TEAM_MASTER, BRIDGE
++	 * variable: MASTER, MASTER_UUID, TEAM_MASTER, TEAM_MASTER_UUID, BRIDGE, BRIDGE_UUID
+ 	 * description: Reference to master connection. The variable used depends on
+-	 *   the connection type.
++	 *   the connection type and the value. In general, if the *_UUID variant is present,
++	 *   the variant without *_UUID is ignored. NetworkManager attempts to write both
++	 *   for compatibility with legacy tooling.
+ 	 * ---end---
+ 	 */
+ 	g_object_class_install_property
+@@ -1673,10 +1675,12 @@ nm_setting_connection_class_init (NMSettingConnectionClass *setting_class)
+ 	 **/
+ 	/* ---ifcfg-rh---
+ 	 * property: slave-type
+-	 * variable: MASTER, TEAM_MASTER, DEVICETYPE, BRIDGE
++	 * variable: MASTER, MASTER_UUID, TEAM_MASTER, TEAM_MASTER_UUID, DEVICETYPE,
++	 *   BRIDGE, BRIDGE_UUID
+ 	 * description: Slave type doesn't map directly to a variable, but it is
+-	 *   recognized using different variables.  MASTER for bonding,
+-	 *   TEAM_MASTER and DEVICETYPE for teaming, BRIDGE for bridging.
++	 *   recognized using different variables.  MASTER and MASTER_UUID for bonding,
++	 *   TEAM_MASTER, TEAM_MASTER_UUID and DEVICETYPE for teaming, BRIDGE
++	 *   and BRIDGE_UUID for bridging.
+ 	 * ---end---
+ 	 */
+ 	g_object_class_install_property
+diff --git a/src/nm-manager.c b/src/nm-manager.c
+index c3d65cd..964c18a 100644
+--- a/src/nm-manager.c
++++ b/src/nm-manager.c
+@@ -1135,6 +1135,30 @@ nm_manager_get_connection_iface (NMManager *self,
+ }
+ 
+ /**
++ * nm_manager_iface_for_uuid:
++ * @self: the #NMManager
++ * @uuid: the connection uuid
++ *
++ * Gets a link name for the given UUID. Useful for the settings plugins that
++ * wish to write configuration files compatible with tooling that can't
++ * interpret our UUIDs.
++ *
++ * Returns: An interface name; %NULL if none matches
++ */
++const char *
++nm_manager_iface_for_uuid (NMManager *self, const char *uuid)
++{
++	NMManagerPrivate *priv = NM_MANAGER_GET_PRIVATE (self);
++	NMSettingsConnection *connection;
++
++	connection = nm_settings_get_connection_by_uuid (priv->settings, uuid);
++	if (!connection)
++		return NULL;
++
++	return nm_connection_get_interface_name (NM_CONNECTION (connection));
++}
++
++/**
+  * system_create_virtual_device:
+  * @self: the #NMManager
+  * @connection: the connection which might require a virtual device
+diff --git a/src/nm-manager.h b/src/nm-manager.h
+index d7aabff..ce3fa5a 100644
+--- a/src/nm-manager.h
++++ b/src/nm-manager.h
+@@ -99,6 +99,9 @@ char *              nm_manager_get_connection_iface (NMManager *self,
+                                                      NMDevice **out_parent,
+                                                      GError **error);
+ 
++const char *        nm_manager_iface_for_uuid          (NMManager *self,
++                                                        const char *uuid);
++
+ NMActiveConnection *nm_manager_activate_connection     (NMManager *manager,
+                                                         NMSettingsConnection *connection,
+                                                         const char *specific_object,
+diff --git a/src/settings/plugins/ifcfg-rh/reader.c b/src/settings/plugins/ifcfg-rh/reader.c
+index 5a351cf..825d51e 100644
+--- a/src/settings/plugins/ifcfg-rh/reader.c
++++ b/src/settings/plugins/ifcfg-rh/reader.c
+@@ -227,7 +227,9 @@ make_connection_setting (const char *file,
+ 		g_strfreev (items);
+ 	}
+ 
+-	value = svGetValue (ifcfg, "BRIDGE", FALSE);
++	value = svGetValue (ifcfg, "BRIDGE_UUID", FALSE);
++	if (!value)
++		value = svGetValue (ifcfg, "BRIDGE", FALSE);
+ 	if (value) {
+ 		const char *old_value;
+ 
+@@ -1607,7 +1609,10 @@ check_if_bond_slave (shvarFile *ifcfg,
+ {
+ 	char *value;
+ 
+-	value = svGetValue (ifcfg, "MASTER", FALSE);
++	value = svGetValue (ifcfg, "MASTER_UUID", FALSE);
++	if (!value)
++		value = svGetValue (ifcfg, "MASTER", FALSE);
++
+ 	if (value) {
+ 		g_object_set (s_con, NM_SETTING_CONNECTION_MASTER, value, NULL);
+ 		g_object_set (s_con,
+@@ -1627,9 +1632,12 @@ check_if_team_slave (shvarFile *ifcfg,
+ {
+ 	gs_free char *value = NULL;
+ 
+-	value = svGetValue (ifcfg, "TEAM_MASTER", FALSE);
++	value = svGetValue (ifcfg, "TEAM_MASTER_UUID", FALSE);
++	if (!value)
++		value = svGetValue (ifcfg, "TEAM_MASTER", FALSE);
+ 	if (!value)
+ 		return FALSE;
++
+ 	g_object_set (s_con, NM_SETTING_CONNECTION_MASTER, value, NULL);
+ 	g_object_set (s_con, NM_SETTING_CONNECTION_SLAVE_TYPE, NM_SETTING_TEAM_SETTING_NAME, NULL);
+ 	return TRUE;
+@@ -4563,7 +4571,9 @@ make_bridge_port_setting (shvarFile *ifcfg)
+ 
+ 	g_return_val_if_fail (ifcfg != NULL, FALSE);
+ 
+-	value = svGetValue (ifcfg, "BRIDGE", FALSE);
++	value = svGetValue (ifcfg, "BRIDGE_UUID", FALSE);
++	if (!value)
++		value = svGetValue (ifcfg, "BRIDGE", FALSE);
+ 	if (value) {
+ 		g_free (value);
+ 
+diff --git a/src/settings/plugins/ifcfg-rh/writer.c b/src/settings/plugins/ifcfg-rh/writer.c
+index dcc48f2..dff8f1b 100644
+--- a/src/settings/plugins/ifcfg-rh/writer.c
++++ b/src/settings/plugins/ifcfg-rh/writer.c
+@@ -32,6 +32,7 @@
+ #include <unistd.h>
+ #include <stdio.h>
+ 
++#include "nm-manager.h"
+ #include "nm-setting-connection.h"
+ #include "nm-setting-wired.h"
+ #include "nm-setting-wireless.h"
+@@ -1804,13 +1805,13 @@ write_connection_setting (NMSettingConnection *s_con, shvarFile *ifcfg)
+ {
+ 	guint32 n, i;
+ 	GString *str;
+-	const char *master, *type;
++	const char *master, *master_iface = NULL, *type;
+ 	char *tmp;
+ 	gint i_int;
+-	const char *v_master = NULL;
++	const char *v_master = NULL, *v_master_uuid = NULL;
++	const char *v_bridge = NULL, *v_bridge_uuid = NULL;
++	const char *v_team_master = NULL, *v_team_master_uuid = NULL;
+ 	const char *v_slave = NULL;
+-	const char *v_bridge = NULL;
+-	const char *v_team_master = NULL;
+ 
+ 	svSetValue (ifcfg, "NAME", nm_setting_connection_get_id (s_con), FALSE);
+ 	svSetValue (ifcfg, "UUID", nm_setting_connection_get_uuid (s_con), FALSE);
+@@ -1878,25 +1879,43 @@ write_connection_setting (NMSettingConnection *s_con, shvarFile *ifcfg)
+ 
+ 	master = nm_setting_connection_get_master (s_con);
+ 	if (master) {
++		/* The reader prefers the *_UUID variants, however we still try to resolve
++		 * it into an interface name, so that legacy tooling is not confused. */
++		if (!nm_utils_get_testing ()) {
++			/* This is conditional for easier testing. */
++			master_iface = nm_manager_iface_for_uuid (nm_manager_get (), master);
++		}
++		if (!master_iface) {
++			master_iface = master;
++			master = NULL;
++
++		}
++
+ 		if (nm_setting_connection_is_slave_type (s_con, NM_SETTING_BOND_SETTING_NAME)) {
+-			v_master = master;
++			v_master_uuid = master;
++			v_master = master_iface;
+ 			v_slave = "yes";
+-		} else if (nm_setting_connection_is_slave_type (s_con, NM_SETTING_BRIDGE_SETTING_NAME))
+-			v_bridge = master;
+-		else if (nm_setting_connection_is_slave_type (s_con, NM_SETTING_TEAM_SETTING_NAME)) {
+-			v_team_master = master;
++		} else if (nm_setting_connection_is_slave_type (s_con, NM_SETTING_BRIDGE_SETTING_NAME)) {
++			v_bridge_uuid = master;
++			v_bridge = master_iface;
++		} else if (nm_setting_connection_is_slave_type (s_con, NM_SETTING_TEAM_SETTING_NAME)) {
++			v_team_master_uuid = master;
++			v_team_master = master_iface;
+ 			svSetValue (ifcfg, "TYPE", NULL, FALSE);
+ 		}
+ 	}
+ 
++	svSetValue (ifcfg, "MASTER_UUID", v_master_uuid, FALSE);
+ 	svSetValue (ifcfg, "MASTER", v_master, FALSE);
+ 	svSetValue (ifcfg, "SLAVE", v_slave, FALSE);
++	svSetValue (ifcfg, "BRIDGE_UUID", v_bridge_uuid, FALSE);
+ 	svSetValue (ifcfg, "BRIDGE", v_bridge, FALSE);
++	svSetValue (ifcfg, "TEAM_MASTER_UUID", v_team_master_uuid, FALSE);
+ 	svSetValue (ifcfg, "TEAM_MASTER", v_team_master, FALSE);
+ 
+ 	if (nm_streq0 (type, NM_SETTING_TEAM_SETTING_NAME))
+ 		svSetValue (ifcfg, "DEVICETYPE", TYPE_TEAM, FALSE);
+-	else if (master && nm_setting_connection_is_slave_type (s_con, NM_SETTING_TEAM_SETTING_NAME))
++	else if (master_iface && nm_setting_connection_is_slave_type (s_con, NM_SETTING_TEAM_SETTING_NAME))
+ 		svSetValue (ifcfg, "DEVICETYPE", TYPE_TEAM_PORT, FALSE);
+ 	else
+ 		svSetValue (ifcfg, "DEVICETYPE", NULL, FALSE);
+-- 
+2.9.3
+
