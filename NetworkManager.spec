@@ -12,7 +12,7 @@
 
 %global rpm_version 1.4.4
 %global real_version 1.4.4
-%global release_version 3
+%global release_version 4
 %global epoch_version 1
 
 %global obsoletes_nmver 1:0.9.9.95-1
@@ -99,6 +99,7 @@ Source2: 00-server.conf
 Source3: 20-connectivity-fedora.conf
 
 Patch1: 0001-upstream-patches.patch
+Patch2: 0002-ifcfg-ensure-ipv4.method-is-not-disabled-when-readin.patch
 
 Requires(post): systemd
 Requires(preun): systemd
@@ -341,6 +342,7 @@ by nm-connection-editor and nm-applet in a non-graphical environment.
 %setup -q -n NetworkManager-%{real_version}
 
 %patch1 -p1
+%patch2 -p1
 
 %build
 %if %{with regen_docs}
@@ -648,6 +650,10 @@ fi
 %endif
 
 %changelog
+* Mon Feb 20 2017 Dusty Mabe <dusty@dustymabe.com> - 1:1.4.4-4
+- apply upstream patch a8f0d8 from upstream:
+- ifcfg: ensure ipv4.method is not "disabled" when reading IP 
+
 * Sat Jan 14 2017 Thomas Haller <thaller@redhat.com> - 1:1.4.4-3
 - apply patches from upstream nm-1-4 stable branch
 - fix cloned-mac-address default for old keyfile connections  (rh#1413297)
