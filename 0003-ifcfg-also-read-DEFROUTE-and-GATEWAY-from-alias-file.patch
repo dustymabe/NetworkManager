@@ -7,8 +7,8 @@ Also accept DEFROUTE and GATEWAY when they are defined in
 alias files -- provided, that they are not yet defined
 in the main ifcfg file.
 ---
- Makefile.am                                        |  2 +
- .../plugins/ifcfg-rh/nms-ifcfg-rh-reader.c         | 47 ++++++++++++++++++----
+ .../plugins/ifcfg-rh/tests/network-scripts/Makefile.am |  2 +
+ .../plugins/ifcfg-rh/reader.c                      | 47 ++++++++++++++++++----
  .../ifcfg-rh/tests/network-scripts/ifcfg-aliasem3  | 11 +++++
  .../tests/network-scripts/ifcfg-aliasem3:1         |  4 ++
  .../plugins/ifcfg-rh/tests/test-ifcfg-rh.c         | 32 +++++++++++----
@@ -16,23 +16,22 @@ in the main ifcfg file.
  create mode 100644 src/settings/plugins/ifcfg-rh/tests/network-scripts/ifcfg-aliasem3
  create mode 100644 src/settings/plugins/ifcfg-rh/tests/network-scripts/ifcfg-aliasem3:1
 
-diff --git a/Makefile.am b/Makefile.am
-index 11f9ce8..0de5f5c 100644
---- a/Makefile.am
-+++ b/Makefile.am
-@@ -2067,6 +2067,8 @@ src_settings_plugins_ifcfg_rh_tests_network_scripts_alias_files = \
- 	src/settings/plugins/ifcfg-rh/tests/network-scripts/ifcfg-aliasem1:1 \
- 	src/settings/plugins/ifcfg-rh/tests/network-scripts/ifcfg-aliasem2 \
- 	src/settings/plugins/ifcfg-rh/tests/network-scripts/ifcfg-aliasem2:1
-+	src/settings/plugins/ifcfg-rh/tests/network-scripts/ifcfg-aliasem3 \
-+	src/settings/plugins/ifcfg-rh/tests/network-scripts/ifcfg-aliasem3:1
+diff --git a/src/settings/plugins/ifcfg-rh/tests/network-scripts/Makefile.am b/src/settings/plugins/ifcfg-rh/tests/network-scripts/Makefile.am
+--- a/src/settings/plugins/ifcfg-rh/tests/network-scripts/Makefile.am
++++ b/src/settings/plugins/ifcfg-rh/tests/network-scripts/Makefile.am
+@@ -154,6 +154,8 @@ ALIAS_FILES = \
+ 	ifcfg-aliasem1:1 \
+ 	ifcfg-aliasem2 \
+ 	ifcfg-aliasem2:1
++	ifcfg-aliasem3 \
++	ifcfg-aliasem3:1
  
- dist-hook-settings-ifcfg-rh-alias-files:
- 	@for f in $(src_settings_plugins_ifcfg_rh_tests_network_scripts_alias_files); do \
-diff --git a/src/settings/plugins/ifcfg-rh/nms-ifcfg-rh-reader.c b/src/settings/plugins/ifcfg-rh/nms-ifcfg-rh-reader.c
+ dist-hook:
+ 	@for f in $(ALIAS_FILES); do \
+diff --git a/src/settings/plugins/ifcfg-rh/reader.c b/src/settings/plugins/ifcfg-rh/reader.c
 index 4ee61a7..d51794c 100644
---- a/src/settings/plugins/ifcfg-rh/nms-ifcfg-rh-reader.c
-+++ b/src/settings/plugins/ifcfg-rh/nms-ifcfg-rh-reader.c
+--- a/src/settings/plugins/ifcfg-rh/reader.c
++++ b/src/settings/plugins/ifcfg-rh/reader.c
 @@ -957,6 +957,7 @@ make_proxy_setting (shvarFile *ifcfg, GError **error)
  static NMSetting *
  make_ip4_setting (shvarFile *ifcfg,
@@ -42,8 +41,8 @@ index 4ee61a7..d51794c 100644
  {
  	NMSettingIPConfig *s_ip4 = NULL;
 @@ -966,13 +967,15 @@ make_ip4_setting (shvarFile *ifcfg,
- 	gs_free char *dns_options_free = NULL;
- 	const char *dns_options = NULL;
+ 	char *method;
+ 	char *dns_options = NULL;
  	gs_free char *gateway = NULL;
 -	gint32 i;
 +	int i;
@@ -135,7 +134,7 @@ index 4ee61a7..d51794c 100644
  		}
 @@ -5091,6 +5119,7 @@ connection_from_file_full (const char *filename,
  	char *devtype, *bootproto;
- 	NMSetting *s_ip4, *s_ip6, *s_proxy, *s_port, *s_dcb = NULL;
+ 	NMSetting *s_ip4, *s_ip6, *s_port, *s_dcb = NULL;
  	const char *ifcfg_name = NULL;
 +	gboolean has_ip4_defroute = FALSE;
  
