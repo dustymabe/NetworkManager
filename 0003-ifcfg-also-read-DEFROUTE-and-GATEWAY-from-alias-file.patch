@@ -1,0 +1,259 @@
+From 3cc00dd550fcbd83ec2f1af9eeb83bf5ec921d21 Mon Sep 17 00:00:00 2001
+From: Thomas Haller <thaller@redhat.com>
+Date: Mon, 20 Feb 2017 20:51:45 +0100
+Subject: [PATCH] ifcfg: also read DEFROUTE and GATEWAY from alias files
+
+Also accept DEFROUTE and GATEWAY when they are defined in
+alias files -- provided, that they are not yet defined
+in the main ifcfg file.
+---
+ Makefile.am                                        |  2 +
+ .../plugins/ifcfg-rh/nms-ifcfg-rh-reader.c         | 47 ++++++++++++++++++----
+ .../ifcfg-rh/tests/network-scripts/ifcfg-aliasem3  | 11 +++++
+ .../tests/network-scripts/ifcfg-aliasem3:1         |  4 ++
+ .../plugins/ifcfg-rh/tests/test-ifcfg-rh.c         | 32 +++++++++++----
+ 5 files changed, 80 insertions(+), 16 deletions(-)
+ create mode 100644 src/settings/plugins/ifcfg-rh/tests/network-scripts/ifcfg-aliasem3
+ create mode 100644 src/settings/plugins/ifcfg-rh/tests/network-scripts/ifcfg-aliasem3:1
+
+diff --git a/Makefile.am b/Makefile.am
+index 11f9ce8..0de5f5c 100644
+--- a/Makefile.am
++++ b/Makefile.am
+@@ -2067,6 +2067,8 @@ src_settings_plugins_ifcfg_rh_tests_network_scripts_alias_files = \
+ 	src/settings/plugins/ifcfg-rh/tests/network-scripts/ifcfg-aliasem1:1 \
+ 	src/settings/plugins/ifcfg-rh/tests/network-scripts/ifcfg-aliasem2 \
+ 	src/settings/plugins/ifcfg-rh/tests/network-scripts/ifcfg-aliasem2:1
++	src/settings/plugins/ifcfg-rh/tests/network-scripts/ifcfg-aliasem3 \
++	src/settings/plugins/ifcfg-rh/tests/network-scripts/ifcfg-aliasem3:1
+ 
+ dist-hook-settings-ifcfg-rh-alias-files:
+ 	@for f in $(src_settings_plugins_ifcfg_rh_tests_network_scripts_alias_files); do \
+diff --git a/src/settings/plugins/ifcfg-rh/nms-ifcfg-rh-reader.c b/src/settings/plugins/ifcfg-rh/nms-ifcfg-rh-reader.c
+index 4ee61a7..d51794c 100644
+--- a/src/settings/plugins/ifcfg-rh/nms-ifcfg-rh-reader.c
++++ b/src/settings/plugins/ifcfg-rh/nms-ifcfg-rh-reader.c
+@@ -957,6 +957,7 @@ make_proxy_setting (shvarFile *ifcfg, GError **error)
+ static NMSetting *
+ make_ip4_setting (shvarFile *ifcfg,
+                   const char *network_file,
++                  gboolean *out_has_defroute,
+                   GError **error)
+ {
+ 	NMSettingIPConfig *s_ip4 = NULL;
+@@ -966,13 +967,15 @@ make_ip4_setting (shvarFile *ifcfg,
+ 	gs_free char *dns_options_free = NULL;
+ 	const char *dns_options = NULL;
+ 	gs_free char *gateway = NULL;
+-	gint32 i;
++	int i;
+ 	shvarFile *network_ifcfg;
+ 	shvarFile *route_ifcfg;
+-	gboolean never_default = FALSE;
++	gboolean never_default;
+ 	gint64 timeout;
+ 	gint priority;
+ 
++	nm_assert (out_has_defroute && !*out_has_defroute);
++
+ 	s_ip4 = (NMSettingIPConfig *) nm_setting_ip4_config_new ();
+ 
+ 	/* First check if DEFROUTE is set for this device; DEFROUTE has the
+@@ -980,7 +983,13 @@ make_ip4_setting (shvarFile *ifcfg,
+ 	 * specified is DEFROUTE=yes which means that this connection can be used
+ 	 * as a default route
+ 	 */
+-	never_default = !svGetValueBoolean (ifcfg, "DEFROUTE", TRUE);
++	i = svGetValueBoolean (ifcfg, "DEFROUTE", -1);
++	if (i == -1)
++		never_default = FALSE;
++	else {
++		never_default = !i;
++		*out_has_defroute = TRUE;
++	}
+ 
+ 	/* Then check if GATEWAYDEV; it's global and overrides DEFROUTE */
+ 	network_ifcfg = svOpenFile (network_file, NULL);
+@@ -1263,7 +1272,7 @@ done:
+ }
+ 
+ static void
+-read_aliases (NMSettingIPConfig *s_ip4, const char *filename)
++read_aliases (NMSettingIPConfig *s_ip4, gboolean read_defroute, const char *filename)
+ {
+ 	GDir *dir;
+ 	char *dirname, *base;
+@@ -1289,6 +1298,7 @@ read_aliases (NMSettingIPConfig *s_ip4, const char *filename)
+ 		gboolean ok;
+ 
+ 		while ((item = g_dir_read_name (dir))) {
++			gs_free char *gateway = NULL;
+ 			char *full_path, *device;
+ 			const char *p;
+ 
+@@ -1335,14 +1345,30 @@ read_aliases (NMSettingIPConfig *s_ip4, const char *filename)
+ 			}
+ 
+ 			addr = NULL;
+-			ok = read_full_ip4_address (parsed, -1, base_addr, &addr, NULL, &err);
+-			svCloseFile (parsed);
++			ok = read_full_ip4_address (parsed, -1, base_addr, &addr,
++			                            read_defroute ? &gateway : NULL,
++			                            &err);
+ 			if (ok) {
+ 				nm_ip_address_set_attribute (addr, "label", g_variant_new_string (device));
+ 				if (!nm_setting_ip_config_add_address (s_ip4, addr))
+ 					PARSE_WARNING ("duplicate IP4 address in alias file %s", item);
+ 				if (nm_streq0 (nm_setting_ip_config_get_method (s_ip4), NM_SETTING_IP4_CONFIG_METHOD_DISABLED))
+ 					g_object_set (s_ip4, NM_SETTING_IP_CONFIG_METHOD, NM_SETTING_IP4_CONFIG_METHOD_MANUAL, NULL);
++				if (read_defroute) {
++					int i;
++
++					if (gateway) {
++						g_object_set (s_ip4, NM_SETTING_IP_CONFIG_GATEWAY, gateway, NULL);
++						read_defroute = FALSE;
++					}
++					i = svGetValueBoolean (parsed, "DEFROUTE", -1);
++					if (i != -1) {
++						g_object_set (s_ip4,
++						              NM_SETTING_IP_CONFIG_NEVER_DEFAULT, (gboolean) !i,
++						              NULL);
++						read_defroute = FALSE;
++					}
++				}
+ 			} else {
+ 				PARSE_WARNING ("error reading IP4 address from alias file '%s': %s",
+ 				               full_path, err ? err->message : "no address");
+@@ -1350,6 +1376,8 @@ read_aliases (NMSettingIPConfig *s_ip4, const char *filename)
+ 			}
+ 			nm_ip_address_unref (addr);
+ 
++			svCloseFile (parsed);
++
+ 			g_free (device);
+ 			g_free (full_path);
+ 		}
+@@ -5091,6 +5119,7 @@ connection_from_file_full (const char *filename,
+ 	char *devtype, *bootproto;
+ 	NMSetting *s_ip4, *s_ip6, *s_proxy, *s_port, *s_dcb = NULL;
+ 	const char *ifcfg_name = NULL;
++	gboolean has_ip4_defroute = FALSE;
+ 
+ 	g_return_val_if_fail (filename != NULL, NULL);
+ 	g_return_val_if_fail (out_unhandled && !*out_unhandled, NULL);
+@@ -5290,13 +5319,15 @@ connection_from_file_full (const char *filename,
+ 	} else
+ 		nm_connection_add_setting (connection, s_ip6);
+ 
+-	s_ip4 = make_ip4_setting (parsed, network_file, error);
++	s_ip4 = make_ip4_setting (parsed, network_file, &has_ip4_defroute, error);
+ 	if (!s_ip4) {
+ 		g_object_unref (connection);
+ 		connection = NULL;
+ 		goto done;
+ 	} else {
+-		read_aliases (NM_SETTING_IP_CONFIG (s_ip4), filename);
++		read_aliases (NM_SETTING_IP_CONFIG (s_ip4),
++		              !has_ip4_defroute && !nm_setting_ip_config_get_gateway (NM_SETTING_IP_CONFIG (s_ip4)),
++		              filename);
+ 		nm_connection_add_setting (connection, s_ip4);
+ 	}
+ 
+diff --git a/src/settings/plugins/ifcfg-rh/tests/network-scripts/ifcfg-aliasem3 b/src/settings/plugins/ifcfg-rh/tests/network-scripts/ifcfg-aliasem3
+new file mode 100644
+index 0000000..b7bdd78
+--- /dev/null
++++ b/src/settings/plugins/ifcfg-rh/tests/network-scripts/ifcfg-aliasem3
+@@ -0,0 +1,11 @@
++TYPE=Ethernet
++DEVICE=aliasem0
++HWADDR=00:11:22:33:44:55
++BOOTPROTO=none
++ONBOOT=yes
++DNS1=4.2.2.1
++DNS2=4.2.2.2
++IPADDR=192.168.1.5
++PREFIX=24
++NETMASK=255.255.255.0
++IPV6INIT=no
+diff --git a/src/settings/plugins/ifcfg-rh/tests/network-scripts/ifcfg-aliasem3:1 b/src/settings/plugins/ifcfg-rh/tests/network-scripts/ifcfg-aliasem3:1
+new file mode 100644
+index 0000000..5e15187
+--- /dev/null
++++ b/src/settings/plugins/ifcfg-rh/tests/network-scripts/ifcfg-aliasem3:1
+@@ -0,0 +1,4 @@
++DEVICE=aliasem3:1
++IPADDR=192.168.1.6
++DEFROUTE=yes
++GATEWAY=192.168.1.1
+diff --git a/src/settings/plugins/ifcfg-rh/tests/test-ifcfg-rh.c b/src/settings/plugins/ifcfg-rh/tests/test-ifcfg-rh.c
+index 18bf2c4..b05f05b 100644
+--- a/src/settings/plugins/ifcfg-rh/tests/test-ifcfg-rh.c
++++ b/src/settings/plugins/ifcfg-rh/tests/test-ifcfg-rh.c
+@@ -1624,24 +1624,38 @@ test_read_802_1x_ttls_eapgtc (void)
+ }
+ 
+ static void
+-test_read_wired_aliases_good (void)
++test_read_wired_aliases_good (gconstpointer test_data)
+ {
++	const int N = GPOINTER_TO_INT (test_data);
+ 	NMConnection *connection;
+ 	NMSettingConnection *s_con;
+ 	NMSettingIPConfig *s_ip4;
+-	int expected_num_addresses = 4;
+-	const char *expected_address[4] = { "192.168.1.5", "192.168.1.6", "192.168.1.9", "192.168.1.99" };
+-	const char *expected_label[4] = { NULL, "aliasem0:1", "aliasem0:2", "aliasem0:99" };
++	int expected_num_addresses;
++	const char *expected_address_0[] = { "192.168.1.5", "192.168.1.6", "192.168.1.9", "192.168.1.99", NULL };
++	const char *expected_address_3[] = { "192.168.1.5", "192.168.1.6", NULL };
++	const char *expected_label_0[] = { NULL, "aliasem0:1", "aliasem0:2", "aliasem0:99", NULL, };
++	const char *expected_label_3[] = { NULL, "aliasem3:1", NULL, };
++	const char **expected_address;
++	const char **expected_label;
+ 	int i, j;
++	char path[256];
+ 
+-	connection = _connection_from_file (TEST_IFCFG_DIR "/network-scripts/ifcfg-aliasem0",
+-	                                    NULL, TYPE_ETHERNET, NULL);
++	expected_address = N == 0 ? expected_address_0 : expected_address_3;
++	expected_label   = N == 0 ? expected_label_0   : expected_label_3;
++	expected_num_addresses = g_strv_length ((char **) expected_address);
++
++	nm_sprintf_buf (path, TEST_IFCFG_DIR "/network-scripts/ifcfg-aliasem%d", N);
++
++	connection = _connection_from_file (path, NULL, TYPE_ETHERNET, NULL);
+ 
+ 	/* ===== CONNECTION SETTING ===== */
+ 
+ 	s_con = nm_connection_get_setting_connection (connection);
+ 	g_assert (s_con);
+-	g_assert_cmpstr (nm_setting_connection_get_id (s_con), ==, "System aliasem0");
++	if (N == 0)
++		g_assert_cmpstr (nm_setting_connection_get_id (s_con), ==, "System aliasem0");
++	else
++		g_assert_cmpstr (nm_setting_connection_get_id (s_con), ==, "System aliasem3");
+ 
+ 	/* ===== IPv4 SETTING ===== */
+ 
+@@ -1680,6 +1694,7 @@ test_read_wired_aliases_good (void)
+ 	}
+ 
+ 	/* Gateway */
++	g_assert (!nm_setting_ip_config_get_never_default (s_ip4));
+ 	g_assert_cmpstr (nm_setting_ip_config_get_gateway (s_ip4), ==, "192.168.1.1");
+ 
+ 	for (i = 0; i < expected_num_addresses; i++)
+@@ -8965,7 +8980,8 @@ int main (int argc, char **argv)
+ 
+ 	g_test_add_func (TPATH "802-1x/subj-matches", test_read_write_802_1X_subj_matches);
+ 	g_test_add_func (TPATH "802-1x/ttls-eapgtc", test_read_802_1x_ttls_eapgtc);
+-	g_test_add_func (TPATH "wired/read/aliases", test_read_wired_aliases_good);
++	g_test_add_data_func (TPATH "wired/read/aliases/good/0", GINT_TO_POINTER (0), test_read_wired_aliases_good);
++	g_test_add_data_func (TPATH "wired/read/aliases/good/3", GINT_TO_POINTER (3), test_read_wired_aliases_good);
+ 	g_test_add_func (TPATH "wired/read/aliases/bad1", test_read_wired_aliases_bad_1);
+ 	g_test_add_func (TPATH "wired/read/aliases/bad2", test_read_wired_aliases_bad_2);
+ 	g_test_add_func (TPATH "wifi/read/open", test_read_wifi_open);
+-- 
+2.7.4
+

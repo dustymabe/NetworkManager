@@ -100,6 +100,7 @@ Source3: 20-connectivity-fedora.conf
 
 Patch1: 0001-upstream-patches.patch
 Patch2: 0002-ifcfg-ensure-ipv4.method-is-not-disabled-when-readin.patch
+Patch3: 0003-ifcfg-also-read-DEFROUTE-and-GATEWAY-from-alias-file.patch
 
 Requires(post): systemd
 Requires(preun): systemd
@@ -343,6 +344,7 @@ by nm-connection-editor and nm-applet in a non-graphical environment.
 
 %patch1 -p1
 %patch2 -p1
+%patch3 -p1
 
 %build
 %if %{with regen_docs}
@@ -652,7 +654,9 @@ fi
 %changelog
 * Mon Feb 20 2017 Dusty Mabe <dusty@dustymabe.com> - 1:1.4.4-4
 - apply upstream patch a8f0d8 from upstream:
-- ifcfg: ensure ipv4.method is not "disabled" when reading IP 
+  ifcfg: ensure ipv4.method is not "disabled" when reading IP 
+- apply upstream patch 3cc00d from upstream:
+  ifcfg: also read DEFROUTE and GATEWAY from alias files 
 
 * Sat Jan 14 2017 Thomas Haller <thaller@redhat.com> - 1:1.4.4-3
 - apply patches from upstream nm-1-4 stable branch
